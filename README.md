@@ -35,7 +35,7 @@ At a glance, the emulator supports dataset / table / job / tabledata management,
 
 ## GoogleSQL
 
-Query execution is powered by [googlesqlite](https://github.com/goccy/googlesqlite) — on this branch the pure-Go DuckDB fork [esilver/googlesqlite](https://github.com/esilver/googlesqlite), pinned at tag `v0.2.10-pure-go` — which implements almost all of [GoogleSQL](https://cloud.google.com/bigquery/docs/reference/standard-sql/introduction): the pinned fork passes 986 / 994 BigQuery conformance specs with zero failures (the remaining 8 are skips), covering roughly 570 built-in functions and 16 / 18 data types. Beyond functions, it also supports:
+Query execution is powered by [googlesqlite](https://github.com/goccy/googlesqlite) — on this branch the pure-Go DuckDB fork [esilver/googlesqlite](https://github.com/esilver/googlesqlite), pinned at tag `v0.2.15-pure-go` — which implements almost all of [GoogleSQL](https://cloud.google.com/bigquery/docs/reference/standard-sql/introduction): the pinned fork passes 986 / 994 BigQuery conformance specs with zero failures (the remaining 8 are skips), covering roughly 570 built-in functions and 16 / 18 data types. Beyond functions, it also supports:
 
 - Wildcard tables
 - Templated-argument functions
@@ -75,7 +75,7 @@ to pure Go** ([`github.com/esilver/duckdb-go-pure`](https://github.com/esilver/d
 fetched like any other Go module — no cgo, no sibling checkouts, no generated
 files. The only deviation from a stock `go.mod` is a single `replace` directive
 pointing `github.com/goccy/googlesqlite` at the pure-Go dialect fork
-(`github.com/esilver/googlesqlite`, tag `v0.2.10-pure-go`, over
+(`github.com/esilver/googlesqlite`, tag `v0.2.15-pure-go`, over
 `duckdb-go-pure` v0.3.2), which is already committed on the branch. Build from
 a fresh clone with one command:
 
