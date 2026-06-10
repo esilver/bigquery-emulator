@@ -164,7 +164,11 @@ func (r *Repository) CreateView(ctx context.Context, tx *connection.Tx, table *b
 
 func (r *Repository) encodeSchemaField(field *bigqueryv2.TableFieldSchema) string {
 	var elem string
-	if field.Type == "RECORD" {
+	// The legacy name RECORD and the standard name STRUCT are
+	// interchangeable in real BigQuery, and type/mode names are matched
+	// case-insensitively (dbt seeds send lowercase ones).
+	fieldType := strings.ToUpper(field.Type)
+	if fieldType == "RECORD" || (fieldType == "STRUCT" && len(field.Fields) > 0) {
 		types := make([]string, 0, len(field.Fields))
 		for _, f := range field.Fields {
 			types = append(types, fmt.Sprintf("%s %s", f.Name, r.encodeSchemaField(f)))
@@ -173,7 +177,7 @@ func (r *Repository) encodeSchemaField(field *bigqueryv2.TableFieldSchema) strin
 	} else {
 		elem = types.Type(field.Type).TypeKind().String()
 	}
-	if field.Mode == "REPEATED" {
+	if strings.ToUpper(field.Mode) == "REPEATED" {
 		return fmt.Sprintf("ARRAY<%s>", elem)
 	}
 	return elem

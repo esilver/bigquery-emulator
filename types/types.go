@@ -201,8 +201,62 @@ func TypeFromKind(kind int) Type {
 	return ""
 }
 
+// NormalizeSchema canonicalizes the field type and mode names of a
+// client-supplied table schema in place, recursing into RECORD/STRUCT
+// fields. Real BigQuery accepts type names case-insensitively in both
+// the legacy family (string, integer, boolean, record, ...) and the
+// standard family (int64, float64, bool, struct, ...) — dbt seeds in
+// particular send lowercase names through the load-job path — so the
+// emulator uppercases them once at the API boundary and every
+// downstream comparison can stay exact.
+func NormalizeSchema(schema *bigqueryv2.TableSchema) {
+	if schema == nil {
+		return
+	}
+	normalizeFieldSchemas(schema.Fields)
+}
+
+func normalizeFieldSchemas(fields []*bigqueryv2.TableFieldSchema) {
+	for _, field := range fields {
+		if field == nil {
+			continue
+		}
+		field.Type = strings.ToUpper(field.Type)
+		field.Mode = strings.ToUpper(field.Mode)
+		normalizeFieldSchemas(field.Fields)
+	}
+}
+
+// ValidateSchema rejects schema fields whose (normalized) type name is
+// not a known BigQuery type, so a bad name surfaces as a clear client
+// error instead of TYPE_UNKNOWN DDL that fails analysis later.
+func ValidateSchema(schema *bigqueryv2.TableSchema) error {
+	if schema == nil {
+		return nil
+	}
+	return validateFieldSchemas(schema.Fields)
+}
+
+func validateFieldSchemas(fields []*bigqueryv2.TableFieldSchema) error {
+	for _, field := range fields {
+		if field == nil {
+			continue
+		}
+		if Type(field.Type).TypeKind() == zsqltypes.TYPE_UNKNOWN {
+			return fmt.Errorf("invalid value for schema field %q: %q is not a valid field type", field.Name, field.Type)
+		}
+		if err := validateFieldSchemas(field.Fields); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (t Type) TypeKind() zsqltypes.TypeKind {
-	switch t {
+	// Type names reach this mapping straight from client requests and
+	// real BigQuery treats them case-insensitively, so normalize before
+	// the (uppercase) constant match.
+	switch Type(strings.ToUpper(string(t))) {
 	case INT64:
 		return zsqltypes.INT64
 	case INT:
@@ -264,7 +318,7 @@ func (t Type) TypeKind() zsqltypes.TypeKind {
 }
 
 func (t Type) FieldType() FieldType {
-	switch t {
+	switch Type(strings.ToUpper(string(t))) {
 	case INT64:
 		return FieldInteger
 	case INT:

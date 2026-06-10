@@ -1,11 +1,15 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/goccy/go-json"
 	bigqueryv2 "google.golang.org/api/bigquery/v2"
+
+	"github.com/goccy/bigquery-emulator/internal/metadata"
 )
 
 // ServerError represents BigQuery errors.
@@ -126,6 +130,44 @@ func errDuplicate(msg string) *ServerError {
 		Reason:  Duplicate,
 		Message: msg,
 	}
+}
+
+// isAlreadyExistsError reports whether err denotes creating an object
+// (dataset, table, view, job) that already exists, whichever layer it came
+// from: the metadata catalog's typed sentinels, or the query engine's
+// "... already exists" execution errors.
+func isAlreadyExistsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, metadata.ErrDuplicatedTable) ||
+		errors.Is(err, metadata.ErrDuplicatedDataset) ||
+		errors.Is(err, metadata.ErrDuplicatedJob) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already exists") || strings.Contains(msg, "already created")
+}
+
+// jobErrorProto maps a query-job execution error onto the BigQuery error
+// vocabulary. Duplicate-object failures surface with reason "duplicate" and
+// an "Already Exists: ..." message — real BigQuery's shape, which clients
+// (google-cloud-bigquery's exists_ok handling, dbt) branch on — and any
+// other typed *ServerError keeps its own reason; everything else falls back
+// to jobInternalError.
+func jobErrorProto(err error) *ServerError {
+	if isAlreadyExistsError(err) {
+		msg := err.Error()
+		if !strings.Contains(msg, "Already Exists") {
+			msg = "Already Exists: " + msg
+		}
+		return errDuplicate(msg)
+	}
+	var serr *ServerError
+	if errors.As(err, &serr) {
+		return serr
+	}
+	return errJobInternalError(err.Error())
 }
 
 func errInternalError(msg string) *ServerError {

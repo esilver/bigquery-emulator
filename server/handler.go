@@ -446,6 +446,10 @@ func (h *uploadContentHandler) normalizeColumnNameForJSONData(columnMap map[stri
 
 func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentRequest) error {
 	load := r.job.Content().Configuration.Load
+	// Load jobs (dbt seeds in particular) carry lowercase schema field
+	// type names; canonicalize them the way real BigQuery does before the
+	// schema is used to create the table or to type the loaded columns.
+	types.NormalizeSchema(load.Schema)
 	tableRef := load.DestinationTable
 	if tableRef == nil {
 		return errInvalid("load job is missing configuration.load.destinationTable")
@@ -858,6 +862,18 @@ func (h *datasetsInsertHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		dataset: &dataset,
 	})
 	if err != nil {
+		// Creating a dataset that already exists is HTTP 409 with reason
+		// "duplicate" in real BigQuery (clients' exists_ok handling and
+		// retry policies depend on it: a 500 here gets retried until the
+		// client's deadline), not an internalError.
+		if errors.Is(err, metadata.ErrDuplicatedDataset) {
+			datasetID := ""
+			if dataset.DatasetReference != nil {
+				datasetID = dataset.DatasetReference.DatasetId
+			}
+			errorResponse(ctx, w, errDuplicate(fmt.Sprintf("Already Exists: Dataset %s:%s", project.ID, datasetID)))
+			return
+		}
 		errorResponse(ctx, w, errInternalError(err.Error()))
 		return
 	}
@@ -1247,15 +1263,11 @@ func (h *jobsInsertHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		job:     &job,
 	})
 	if err != nil {
-		// Preserve typed *ServerError (e.g. a 404 notFound for a missing
-		// destination table under CREATE_NEVER) so the client sees the
-		// real HTTP status rather than a blanket 400 jobInternalError.
-		var serr *ServerError
-		if errors.As(err, &serr) {
-			errorResponse(ctx, w, serr)
-			return
-		}
-		errorResponse(ctx, w, errJobInternalError(err.Error()))
+		// jobErrorProto preserves typed *ServerError (e.g. a 404 notFound
+		// for a missing destination table under CREATE_NEVER) and maps
+		// duplicate-object failures to 409/duplicate; the rest fall back
+		// to a 400 jobInternalError.
+		errorResponse(ctx, w, jobErrorProto(err))
 		return
 	}
 	encodeResponse(ctx, w, res)
@@ -1631,6 +1643,21 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 	if job.Configuration == nil {
 		return nil, fmt.Errorf("unspecified job configuration")
 	}
+	// jobReference is optional in a jobs.insert request — real BigQuery
+	// generates one (dbt and bare curl repros post only a configuration).
+	// Normalize before any branch: the query path, the GCS load path and
+	// the GCS extract path all read JobReference.JobId, and the previous
+	// unconditional dereference panicked, surfaced as a recovered 500 and
+	// rolled back the job's transaction.
+	if job.JobReference == nil {
+		job.JobReference = &bigqueryv2.JobReference{}
+	}
+	if job.JobReference.ProjectId == "" {
+		job.JobReference.ProjectId = r.project.ID
+	}
+	if job.JobReference.JobId == "" {
+		job.JobReference.JobId = randomID()
+	}
 	if job.Configuration.Query == nil {
 		if job.Configuration.Load != nil && len(job.Configuration.Load.SourceUris) != 0 {
 			// load from google cloud storage
@@ -1668,9 +1695,11 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 		job.Configuration.Query.QueryParameters,
 	)
 	endTime := time.Now()
-	if job.JobReference.JobId == "" {
-		job.JobReference.JobId = randomID() // generate job id
+	var totalBytes int64
+	if response != nil {
+		totalBytes = response.TotalBytes
 	}
+	queryStats := queryJobStatistics(job.Configuration.Query.Query, response, totalBytes)
 	if jobErr == nil {
 		if hasDestinationTable {
 			// insert results to destination table
@@ -1710,12 +1739,14 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 			if err := r.server.contentRepo.AddTableData(ctx, tx, tableRef.ProjectId, tableRef.DatasetId, tableDef); err != nil {
 				return nil, fmt.Errorf("failed to add table data: %w", err)
 			}
-		} else if response != nil && response.Schema != nil && len(response.Schema.Fields) > 0 {
+		} else if queryStats.StatementType == "SELECT" && response != nil && response.Schema != nil && len(response.Schema.Fields) > 0 {
 			// A query that produces a result set (a SELECT, as opposed to a
 			// DDL/DML statement that has no result schema) still gets an
 			// anonymous results table. The job must advertise it through
 			// configuration.query.destinationTable: clients such as the Ruby
-			// one read query results through that reference.
+			// one read query results through that reference. DDL jobs must
+			// NOT carry a destination table: dbt-bigquery branches on
+			// statementType and only resolves the destination for SELECT.
 			destRef, err := h.addQueryResultToDynamicDestinationTable(ctx, tx, r, response)
 			if err != nil {
 				return nil, fmt.Errorf("failed to add query result to dynamic destination table: %w", err)
@@ -1734,22 +1765,13 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 	)
 	status := &bigqueryv2.JobStatus{State: "DONE"}
 	if jobErr != nil {
-		internalErr := errJobInternalError(jobErr.Error())
-		status.ErrorResult = internalErr.ErrorProto()
-		status.Errors = []*bigqueryv2.ErrorProto{internalErr.ErrorProto()}
+		jobProtoErr := jobErrorProto(jobErr)
+		status.ErrorResult = jobProtoErr.ErrorProto()
+		status.Errors = []*bigqueryv2.ErrorProto{jobProtoErr.ErrorProto()}
 	}
 	job.Status = status
-	var totalBytes int64
-	if response != nil {
-		totalBytes = response.TotalBytes
-	}
 	job.Statistics = &bigqueryv2.JobStatistics{
-		Query: &bigqueryv2.JobStatistics2{
-			CacheHit:            false,
-			StatementType:       "SELECT",
-			TotalBytesBilled:    totalBytes,
-			TotalBytesProcessed: totalBytes,
-		},
+		Query:               queryStats,
 		CreationTime:        startTime.Unix(),
 		StartTime:           startTime.Unix(),
 		EndTime:             endTime.Unix(),
@@ -1784,8 +1806,19 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 }
 
 func syncCatalog(ctx context.Context, server *Server, cat *googlesqlite.ChangedCatalog) error {
+	// Added must upsert, not blind-add: a CREATE OR REPLACE TABLE/VIEW that
+	// replaced an existing object also arrives in Added (the engine already
+	// performed the replace), and the metadata entry may pre-exist either
+	// from earlier statements in this process or from the persistent
+	// catalog of a reopened --database file.
 	for _, table := range cat.Table.Added {
-		if err := addTableMetadata(ctx, server, table); err != nil {
+		if err := upsertTableMetadata(ctx, server, table); err != nil {
+			return err
+		}
+	}
+	// Updated (e.g. ALTER TABLE) reshapes an existing object's schema.
+	for _, table := range cat.Table.Updated {
+		if err := upsertTableMetadata(ctx, server, table); err != nil {
 			return err
 		}
 	}
@@ -1797,7 +1830,7 @@ func syncCatalog(ctx context.Context, server *Server, cat *googlesqlite.ChangedC
 	return nil
 }
 
-func addTableMetadata(ctx context.Context, server *Server, spec *googlesqlite.TableSpec) error {
+func upsertTableMetadata(ctx context.Context, server *Server, spec *googlesqlite.TableSpec) error {
 	if len(spec.NamePath) != 3 {
 		return fmt.Errorf("unexpected table name path: %v", spec.NamePath)
 	}
@@ -1837,8 +1870,26 @@ func addTableMetadata(ctx context.Context, server *Server, spec *googlesqlite.Ta
 	// view so it is typed correctly and dropped with DROP VIEW.
 	if spec.IsView {
 		table.View = &bigqueryv2.ViewDefinition{Query: spec.Query}
+		table.Type = string(ViewTableType)
 	}
-	if _, err := createTableMetadata(ctx, tx, server, project, dataset, table); err != nil {
+	if existing := dataset.Table(tableID); existing != nil {
+		// CREATE OR REPLACE (or ALTER): replace the metadata entry's
+		// schema and view definition in place instead of erroring with
+		// ErrDuplicatedTable on the re-add. Identity fields (id, type,
+		// creationTime, ...) are preserved by Table.Replace.
+		table.LastModifiedTime = uint64(time.Now().Unix())
+		encoded, err := json.Marshal(table)
+		if err != nil {
+			return err
+		}
+		var tableMetadata map[string]interface{}
+		if err := json.Unmarshal(encoded, &tableMetadata); err != nil {
+			return err
+		}
+		if err := existing.Replace(ctx, tx.Tx(), tableMetadata); err != nil {
+			return err
+		}
+	} else if _, err := createTableMetadata(ctx, tx, server, project, dataset, table); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -2000,7 +2051,10 @@ func (h *jobsQueryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		useInt64Timestamp: useInt64Timestamp,
 	})
 	if err != nil {
-		errorResponse(ctx, w, errJobInternalError(err.Error()))
+		// Duplicate-object failures (e.g. CREATE TABLE on an existing
+		// table) surface as 409/duplicate like real BigQuery; other typed
+		// errors keep their reason; the rest fall back to jobInternalError.
+		errorResponse(ctx, w, jobErrorProto(err))
 		return
 	}
 	encodeResponse(ctx, w, res)
@@ -2084,12 +2138,7 @@ func (h *jobsQueryHandler) Handle(ctx context.Context, r *jobsQueryRequest) (*in
 		},
 		Status: &bigqueryv2.JobStatus{State: "DONE"},
 		Statistics: &bigqueryv2.JobStatistics{
-			Query: &bigqueryv2.JobStatistics2{
-				CacheHit:            false,
-				StatementType:       "SELECT",
-				TotalBytesBilled:    totalBytes,
-				TotalBytesProcessed: totalBytes,
-			},
+			Query:               queryJobStatistics(r.queryRequest.Query, response, totalBytes),
 			CreationTime:        startTime.Unix(),
 			StartTime:           startTime.Unix(),
 			EndTime:             endTime.Unix(),
@@ -3030,7 +3079,12 @@ func createTableMetadata(ctx context.Context, tx *connection.Tx, server *Server,
 		),
 	); err != nil {
 		if errors.Is(err, metadata.ErrDuplicatedTable) {
-			return nil, errDuplicate(err.Error())
+			// Real BigQuery shape: 409 Conflict, reason "duplicate",
+			// "Already Exists: Table project:dataset.table".
+			return nil, errDuplicate(fmt.Sprintf(
+				"Already Exists: Table %s:%s.%s",
+				project.ID, dataset.ID, table.TableReference.TableId,
+			))
 		}
 		return nil, errInternalError(err.Error())
 	}
@@ -3038,6 +3092,16 @@ func createTableMetadata(ctx context.Context, tx *connection.Tx, server *Server,
 }
 
 func (h *tablesInsertHandler) Handle(ctx context.Context, r *tablesInsertRequest) (*bigqueryv2.Table, *ServerError) {
+	// Type and mode names are case-insensitive in real BigQuery (dbt seeds
+	// send lowercase ones); canonicalize once here so the stored metadata
+	// and the generated DDL both see uppercase names, and reject genuinely
+	// unknown type names with a clear 400 instead of TYPE_UNKNOWN DDL.
+	if r.table.Schema != nil {
+		types.NormalizeSchema(r.table.Schema)
+		if err := types.ValidateSchema(r.table.Schema); err != nil {
+			return nil, errInvalid(err.Error())
+		}
+	}
 	if r.table.ExternalDataConfiguration != nil {
 		return h.handleExternalTable(ctx, r)
 	}
@@ -3258,6 +3322,7 @@ type tablesPatchRequest struct {
 }
 
 func (h *tablesPatchHandler) Handle(ctx context.Context, r *tablesPatchRequest) (*bigqueryv2.Table, error) {
+	types.NormalizeSchema(r.newTable.Schema)
 	encodedTableData, err := json.Marshal(r.newTable)
 	if err != nil {
 		return nil, err
@@ -3363,6 +3428,7 @@ type tablesUpdateRequest struct {
 }
 
 func (h *tablesUpdateHandler) Handle(ctx context.Context, r *tablesUpdateRequest) (*bigqueryv2.Table, error) {
+	types.NormalizeSchema(r.newTable.Schema)
 	encodedTableData, err := json.Marshal(r.newTable)
 	if err != nil {
 		return nil, err

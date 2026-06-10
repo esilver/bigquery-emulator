@@ -10,7 +10,11 @@ import (
 	bigqueryv2 "google.golang.org/api/bigquery/v2"
 )
 
-var ErrDuplicatedTable = errors.New("table is already created")
+var (
+	ErrDuplicatedTable   = errors.New("table is already created")
+	ErrDuplicatedDataset = errors.New("dataset is already created")
+	ErrDuplicatedJob     = errors.New("job is already created")
+)
 
 type Dataset struct {
 	ID         string
