@@ -37,7 +37,6 @@ require (
 	cloud.google.com/go/monitoring v1.29.0 // indirect
 	cloud.google.com/go/pubsub/v2 v2.5.1 // indirect
 	dario.cat/mergo v1.0.2 // indirect
-	duckdbconverge v0.0.0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/DataDog/go-hll v1.0.2 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.32.0 // indirect
@@ -61,10 +60,10 @@ require (
 	github.com/docker/go-connections v0.6.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dop251/goja v0.0.0-20260311135729-065cd970411c // indirect
-	github.com/duckdb/duckdb-go/v2 v2.10503.1 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.37.0 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.3.3 // indirect
+	github.com/esilver/duckdb-go-pure v0.1.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
@@ -150,8 +149,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/goccy/googlesqlite => ../googlesqlite
-
-replace github.com/duckdb/duckdb-go/v2 => ../duckdb-wasm2go-poc/converge/duckdbcompat
-
-replace duckdbconverge => ../duckdb-wasm2go-poc/converge
+replace github.com/goccy/googlesqlite => github.com/esilver/googlesqlite v0.2.4-pure-go

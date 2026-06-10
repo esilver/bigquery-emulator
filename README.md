@@ -68,6 +68,24 @@ $ go install github.com/goccy/bigquery-emulator/cmd/bigquery-emulator@latest
 The SQL backend is pure Go, so installation is an ordinary `go install` with
 no native build step.
 
+## Pure-Go DuckDB build (this branch)
+
+On the `pure-go-duckdb-backend` branch the query engine is **DuckDB transpiled
+to pure Go** ([`github.com/esilver/duckdb-go-pure`](https://github.com/esilver/duckdb-go-pure)),
+fetched like any other Go module — no cgo, no sibling checkouts, no generated
+files. Build from a fresh clone with one command:
+
+```console
+$ git clone -b pure-go-duckdb-backend https://github.com/esilver/bigquery-emulator
+$ cd bigquery-emulator
+$ CGO_ENABLED=0 go build -gcflags='github.com/esilver/duckdb-go-pure/internal/duckdbcore=-N -l -c=16' ./cmd/bigquery-emulator
+```
+
+(or `make emulator/build`). The `-gcflags` entry disables optimization for ONLY
+the ~150 MB generated engine package — full optimization of it OOMs the Go
+compiler. The first build compiles that package in ~10 minutes; Go's build
+cache makes subsequent builds take seconds.
+
 You can also download the docker image with the following command
 
 ```console
