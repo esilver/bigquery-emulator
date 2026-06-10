@@ -591,6 +591,7 @@ func (r *Repository) AddTableData(ctx context.Context, tx *connection.Tx, projec
 
 	placeholders := make([]string, 0, len(columns))
 	columnsWithEscape := make([]string, 0, len(columns))
+	hasJSONColumn := false
 	for _, col := range columns {
 		if err := validateIdent("column", col.Name); err != nil {
 			return err
@@ -599,6 +600,7 @@ func (r *Repository) AddTableData(ctx context.Context, tx *connection.Tx, projec
 			// A JSON column cannot take a raw bound string: SQLite would store
 			// it as a JSON string literal (double-encoded). PARSE_JSON turns
 			// the bound JSON text into a proper JSON value.
+			hasJSONColumn = true
 			placeholders = append(placeholders, "PARSE_JSON(?)")
 		} else {
 			placeholders = append(placeholders, "?")
@@ -610,18 +612,10 @@ func (r *Repository) AddTableData(ctx context.Context, tx *connection.Tx, projec
 	if err != nil {
 		return err
 	}
-	query := fmt.Sprintf(
-		"INSERT `%s` (%s) VALUES (%s)",
-		tablePath,
-		strings.Join(columnsWithEscape, ","),
-		strings.Join(placeholders, ","),
-	)
 
-	stmt, err := tx.Tx().PrepareContext(ctx, query)
-	if err != nil {
-		return err
-	}
-
+	// Bind values once, in column order; the bulk fast path and the per-row
+	// fallback consume the same rows.
+	rows := make([][]interface{}, 0, len(table.Data))
 	for _, data := range table.Data {
 		values := make([]interface{}, 0, len(table.Columns))
 
@@ -656,7 +650,53 @@ func (r *Repository) AddTableData(ctx context.Context, tx *connection.Tx, projec
 
 			values = append(values, value)
 		}
+		rows = append(rows, values)
+	}
 
+	// Fast path: load the whole batch through the googlesqlite bulk Appender,
+	// one engine statement instead of one per row (see duckdb-go-pure#1).
+	// JSON columns need the PARSE_JSON(?) seam only the per-row path has.
+	// BulkInsert validates and encodes every row before any engine work and
+	// applies the batch atomically inside the open transaction (all rows or
+	// none), so on ANY bulk error — unsupported column shape, value coercion,
+	// driver mismatch — nothing has been written and the per-row INSERT path
+	// below remains the behavioral reference.
+	if !hasJSONColumn {
+		var namePath []string
+		if projectID != "" {
+			namePath = append(namePath, projectID)
+		}
+		if datasetID != "" {
+			namePath = append(namePath, datasetID)
+		}
+		namePath = append(namePath, table.ID)
+		colNames := make([]string, len(columns))
+		for i, col := range columns {
+			colNames[i] = col.Name
+		}
+		if _, err := googlesqlite.BulkInsert(ctx, tx.Conn(), namePath, colNames, rows); err == nil {
+			return nil
+		} else {
+			logger.Logger(ctx).Debug(
+				"bulk insert fast path unavailable; falling back to per-row INSERT",
+				zap.Error(err),
+			)
+		}
+	}
+
+	query := fmt.Sprintf(
+		"INSERT `%s` (%s) VALUES (%s)",
+		tablePath,
+		strings.Join(columnsWithEscape, ","),
+		strings.Join(placeholders, ","),
+	)
+
+	stmt, err := tx.Tx().PrepareContext(ctx, query)
+	if err != nil {
+		return err
+	}
+
+	for _, values := range rows {
 		if _, err := stmt.ExecContext(ctx, values...); err != nil {
 			return err
 		}

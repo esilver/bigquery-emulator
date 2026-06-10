@@ -41,6 +41,13 @@ func (t *Tx) Tx() *sql.Tx {
 	return t.tx
 }
 
+// Conn returns the *sql.Conn the transaction runs on, for callers that need
+// driver-level access (e.g. googlesqlite.BulkInsert via Conn.Raw). Anything
+// executed on the driver connection joins the open transaction.
+func (t *Tx) Conn() *sql.Conn {
+	return t.conn.Conn
+}
+
 func (t *Tx) RollbackIfNotCommitted() error {
 	if t.committed {
 		return nil
