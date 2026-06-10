@@ -73,7 +73,10 @@ no native build step.
 On the `pure-go-duckdb-backend` branch the query engine is **DuckDB transpiled
 to pure Go** ([`github.com/esilver/duckdb-go-pure`](https://github.com/esilver/duckdb-go-pure)),
 fetched like any other Go module — no cgo, no sibling checkouts, no generated
-files. Build from a fresh clone with one command:
+files. The only deviation from a stock `go.mod` is a single `replace` directive
+pointing `github.com/goccy/googlesqlite` at the pure-Go dialect fork
+(`github.com/esilver/googlesqlite`, tag `v0.2.4-pure-go`), which is already
+committed on the branch. Build from a fresh clone with one command:
 
 ```console
 $ git clone -b pure-go-duckdb-backend https://github.com/esilver/bigquery-emulator
@@ -85,6 +88,11 @@ $ CGO_ENABLED=0 go build -gcflags='github.com/esilver/duckdb-go-pure/internal/du
 the ~150 MB generated engine package — full optimization of it OOMs the Go
 compiler. The first build compiles that package in ~10 minutes; Go's build
 cache makes subsequent builds take seconds.
+
+This out-of-the-box build is acceptance-tested end-to-end with the **real `bq`
+CLI** against the running emulator, and the underlying dialect stack passes
+986/994 BigQuery conformance specs with zero failures (see
+[esilver/googlesqlite](https://github.com/esilver/googlesqlite/blob/pure-go-duckdb-backend/REPRODUCE-PURE-GO.md)).
 
 You can also download the docker image with the following command
 
