@@ -20,7 +20,7 @@ See [Install](#install) for `go install`, prebuilt binaries and packages, and [H
 
 - If you can choose the Go language as BigQuery client, you can launch a BigQuery emulator on the same process as the testing process by [httptest](https://pkg.go.dev/net/http/httptest) .
 - BigQuery emulator can be built as a static single binary and can be launched as a standalone process. So, you can use the BigQuery emulator from programs written in non-Go languages or such as the [bq](https://cloud.google.com/bigquery/docs/bq-command-line-tool) command, by specifying the address of the launched BigQuery emulator.
-- BigQuery emulator utilizes SQLite for storage. You can select either memory or file as the data storage destination at startup, and if you set it to file, data can be persisted.
+- BigQuery emulator utilizes an embedded database for storage — DuckDB on this branch (upstream uses SQLite). You can select either memory or file as the data storage destination at startup, and if you set it to file, data can be persisted.
 - You can load seeds from a YAML file on startup
 
 # Status
@@ -35,7 +35,7 @@ At a glance, the emulator supports dataset / table / job / tabledata management,
 
 ## GoogleSQL
 
-Query execution is powered by [googlesqlite](https://github.com/goccy/googlesqlite), which implements almost all of [GoogleSQL](https://cloud.google.com/bigquery/docs/reference/standard-sql/introduction): as of googlesqlite v0.1.0 its spec-driven support matrix reports 523 / 529 GoogleSQL functions and 55 / 59 BigQuery-specific functions implemented — roughly 570 built-in functions — along with 16 / 18 data types. Beyond functions, it also supports:
+Query execution is powered by [googlesqlite](https://github.com/goccy/googlesqlite) — on this branch the pure-Go DuckDB fork [esilver/googlesqlite](https://github.com/esilver/googlesqlite), pinned at tag `v0.2.10-pure-go` — which implements almost all of [GoogleSQL](https://cloud.google.com/bigquery/docs/reference/standard-sql/introduction): the pinned fork passes 986 / 994 BigQuery conformance specs with zero failures (the remaining 8 are skips), covering roughly 570 built-in functions and 16 / 18 data types. Beyond functions, it also supports:
 
 - Wildcard tables
 - Templated-argument functions
@@ -75,20 +75,21 @@ to pure Go** ([`github.com/esilver/duckdb-go-pure`](https://github.com/esilver/d
 fetched like any other Go module — no cgo, no sibling checkouts, no generated
 files. The only deviation from a stock `go.mod` is a single `replace` directive
 pointing `github.com/goccy/googlesqlite` at the pure-Go dialect fork
-(`github.com/esilver/googlesqlite`, tag `v0.2.10-pure-go`), which is already
-committed on the branch. Build from a fresh clone with one command:
+(`github.com/esilver/googlesqlite`, tag `v0.2.10-pure-go`, over
+`duckdb-go-pure` v0.3.2), which is already committed on the branch. Build from
+a fresh clone with one command:
 
 ```console
 $ git clone -b pure-go-duckdb-backend https://github.com/esilver/bigquery-emulator
 $ cd bigquery-emulator
-$ CGO_ENABLED=0 go build -gcflags='github.com/esilver/duckdb-go-pure/internal/duckdbcore/...=-c=1' ./cmd/bigquery-emulator
+$ CGO_ENABLED=0 go build ./cmd/bigquery-emulator
 ```
 
-(or `make emulator/build`). The `-gcflags` entry keeps compiler memory bounded
-on the ~30 generated engine packages (`-c=1`, serial function compilation);
-since duckdb-go-pure v0.3.0 the engine compiles **fully optimized** — no
-`-N`/`-l` anywhere. The first build compiles the engine in about a minute on
-a multicore box; Go's build cache makes subsequent builds take seconds.
+(or `make emulator/build`). No build flags are needed since duckdb-go-pure
+v0.3.1: the engine's oversized functions are split, so plain `go build`
+compiles it **fully optimized** — no `-N`/`-l`/`-gcflags` anywhere. The first
+build compiles the engine in about a minute on a multicore box; Go's build
+cache makes subsequent builds take seconds.
 
 This out-of-the-box build is acceptance-tested end-to-end with the **real `bq`
 CLI** against the running emulator, and the underlying dialect stack passes
@@ -333,13 +334,13 @@ SELECT %s([
 
 # Debugging
 
-If you have specified a database file when starting `bigquery-emulator`, the file is an ordinary SQLite database and can be inspected with any SQLite tool.
+If you have specified a database file when starting `bigquery-emulator`, the file's format depends on the branch: upstream it is an ordinary SQLite database; on this branch (`pure-go-duckdb-backend`) it is a **DuckDB** database and can be inspected with the [DuckDB CLI](https://duckdb.org/docs/api/cli/overview) (`duckdb <file>`). SQLite tools cannot open a DuckDB file.
 
 # How it works
 
 ## BigQuery Emulator Architecture Overview
 
-After receiving a GoogleSQL query via the REST API from bq or a client SDK, the googlesqlite driver parses and analyzes the query — using [go-googlesql](https://github.com/goccy/go-googlesql), a GoogleSQL (ZetaSQL) parser and analyzer written in Go — and executes it against an embedded SQLite database.
+After receiving a GoogleSQL query via the REST API from bq or a client SDK, the googlesqlite driver parses and analyzes the query — using [go-googlesql](https://github.com/goccy/go-googlesql), a GoogleSQL (ZetaSQL) parser and analyzer written in Go — and executes it against an embedded database: SQLite upstream, **DuckDB** (compiled to pure Go) on this branch. The diagram below shows the upstream SQLite shape; on this branch read "DuckDB" for the storage engine.
 
 <img width="600px" src="https://user-images.githubusercontent.com/209884/196145011-e35c2df4-5f5d-43ce-b7df-08cd130b5d31.png"></img>
 
@@ -347,9 +348,9 @@ After receiving a GoogleSQL query via the REST API from bq or a client SDK, the 
 
 ## Type Conversion Flow
 
-BigQuery has a number of types that do not exist in SQLite (e.g. ARRAY and STRUCT).
-In order to handle them in SQLite, googlesqlite encodes all types except `INT64` / `FLOAT64` / `BOOL` with the type information and data combination and stores them in SQLite.
-When using the encoded data, decode the data via a custom function registered with the SQLite driver before use.
+BigQuery has a number of types that do not map one-to-one onto the storage engine (e.g. ARRAY and STRUCT).
+To handle them, googlesqlite encodes such values together with their type information and stores the encoded form in the storage engine — SQLite upstream, DuckDB on this branch.
+When using the encoded data, decode the data via a custom function registered with the driver before use. (The diagram below shows the upstream SQLite shape.)
 
 <img width="600px" src="https://user-images.githubusercontent.com/209884/196145033-aa032878-7e01-4ec7-9a23-b174b87e1a24.png"></img>
 

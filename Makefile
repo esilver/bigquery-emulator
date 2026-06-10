@@ -3,14 +3,13 @@ REVISION := $(shell git rev-parse --short HEAD)
 
 # The SQL backend is pure Go (DuckDB transpiled to Go — module
 # github.com/esilver/duckdb-go-pure), so the emulator builds without cgo and
-# links a fully static binary on every platform. The -gcflags entry keeps the
-# compiler's per-package memory bounded on the ~30 generated engine packages
-# ('-c=1', serial function compilation); since duckdb-go-pure v0.3.0 the
-# engine compiles fully optimized — no '-N'/'-l'. First build takes about a
-# minute on a multicore box, cached afterwards.
+# links a fully static binary on every platform. Since duckdb-go-pure v0.3.1
+# no build flags are needed at all: the engine's oversized functions are
+# split, so plain 'go build' compiles it fully optimized (no '-N'/'-l'/
+# '-gcflags'). First build takes about a minute on a multicore box, cached
+# afterwards.
 emulator/build:
 	CGO_ENABLED=0 go build \
-		-gcflags='github.com/esilver/duckdb-go-pure/internal/duckdbcore/...=-c=1' \
 		-o bigquery-emulator \
 		-ldflags='-s -w -X main.version=${VERSION} -X main.revision=${REVISION}' \
 		./cmd/bigquery-emulator

@@ -20,7 +20,7 @@ If a feature you need is missing or wrong here, please open an
 | 🟡 | Partially supported — see the note |
 | ❌ | Not supported yet |
 
-*Last reviewed: 2026-05-18, against `googlesqlite` v0.1.0.*
+*Last reviewed: 2026-06-10, against `esilver/googlesqlite` tag `v0.2.10-pure-go` (pure-Go DuckDB backend, `duckdb-go-pure` v0.3.2).*
 
 ---
 
@@ -146,7 +146,7 @@ There is no `models.insert` in the BigQuery API — models are created with
 | Table clones | ❌ | |
 | Partitioned tables | 🟡 | Tables with partitioning metadata are accepted, but partition pruning / `_PARTITIONTIME` semantics are not emulated. |
 | Clustered tables | 🟡 | Clustering metadata is accepted but does not affect execution. |
-| Storage backend | ✅ | Embedded SQLite — in-memory or a persisted file (see the README). |
+| Storage backend | ✅ | Embedded DuckDB (compiled to pure Go) on this branch — in-memory or a persisted file (see the README); upstream uses SQLite. |
 
 ---
 
@@ -187,7 +187,7 @@ There is no `models.insert` in the BigQuery API — models are created with
 
 Query execution is delegated to [`googlesqlite`](https://github.com/goccy/googlesqlite),
 which parses and analyzes [GoogleSQL](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/introduction)
-and runs it against the embedded SQLite database. The table below records what
+and runs it against the embedded DuckDB database (SQLite upstream). The table below records what
 the **emulator** wires up; the authoritative, per-function and per-type matrix
 lives in the [`googlesqlite` status](https://github.com/goccy/googlesqlite#status).
 
@@ -198,7 +198,7 @@ lives in the [`googlesqlite` status](https://github.com/goccy/googlesqlite#statu
 | DML (`INSERT` / `UPDATE` / `DELETE` / `MERGE` / `TRUNCATE`) | ✅ | Subject to `googlesqlite` coverage. |
 | Scripting and multi-statement queries | ✅ | Subject to `googlesqlite` coverage. |
 | Stored procedures | ✅ | Created via `routines.insert` or DDL. |
-| Built-in functions (~570) | ✅ | `googlesqlite` v0.1.0: 523/529 GoogleSQL + 55/59 BigQuery-specific. |
+| Built-in functions (~570) | ✅ | `esilver/googlesqlite` `v0.2.10-pure-go`: 986/994 BigQuery conformance specs pass with zero failures (8 skips). |
 | Data types (16 / 18) | ✅ | `NUMERIC` / `BIGNUMERIC` map to Arrow decimal types. |
 | SQL UDFs | ✅ | |
 | JavaScript UDFs | ✅ | Inline `CREATE ... LANGUAGE js` functions; persisting a JS routine via `routines.insert` is not supported. |
@@ -276,5 +276,5 @@ emulator for local development and testing.
 | Standalone server binary / Docker image | ✅ | |
 | YAML seed loader (`--data-from-yaml`) | ✅ | |
 | In-memory storage | ✅ | |
-| Persisted file storage | ✅ | An ordinary SQLite database file. |
+| Persisted file storage | ✅ | A DuckDB database file on this branch (inspect with the DuckDB CLI; SQLite tools cannot open it). |
 | Multi-client conformance suite (`test/e2e`) | ✅ | Python, Ruby, PHP, Node.js, Java clients and the `bq` CLI. |
