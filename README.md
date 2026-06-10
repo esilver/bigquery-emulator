@@ -75,19 +75,20 @@ to pure Go** ([`github.com/esilver/duckdb-go-pure`](https://github.com/esilver/d
 fetched like any other Go module — no cgo, no sibling checkouts, no generated
 files. The only deviation from a stock `go.mod` is a single `replace` directive
 pointing `github.com/goccy/googlesqlite` at the pure-Go dialect fork
-(`github.com/esilver/googlesqlite`, tag `v0.2.4-pure-go`), which is already
+(`github.com/esilver/googlesqlite`, tag `v0.2.10-pure-go`), which is already
 committed on the branch. Build from a fresh clone with one command:
 
 ```console
 $ git clone -b pure-go-duckdb-backend https://github.com/esilver/bigquery-emulator
 $ cd bigquery-emulator
-$ CGO_ENABLED=0 go build -gcflags='github.com/esilver/duckdb-go-pure/internal/duckdbcore=-N -l -c=16' ./cmd/bigquery-emulator
+$ CGO_ENABLED=0 go build -gcflags='github.com/esilver/duckdb-go-pure/internal/duckdbcore/...=-c=1' ./cmd/bigquery-emulator
 ```
 
-(or `make emulator/build`). The `-gcflags` entry disables optimization for ONLY
-the ~150 MB generated engine package — full optimization of it OOMs the Go
-compiler. The first build compiles that package in ~10 minutes; Go's build
-cache makes subsequent builds take seconds.
+(or `make emulator/build`). The `-gcflags` entry keeps compiler memory bounded
+on the ~30 generated engine packages (`-c=1`, serial function compilation);
+since duckdb-go-pure v0.3.0 the engine compiles **fully optimized** — no
+`-N`/`-l` anywhere. The first build compiles the engine in about a minute on
+a multicore box; Go's build cache makes subsequent builds take seconds.
 
 This out-of-the-box build is acceptance-tested end-to-end with the **real `bq`
 CLI** against the running emulator, and the underlying dialect stack passes
