@@ -76,6 +76,13 @@ func (s *storageReadServer) CreateReadSession(ctx context.Context, req *storagep
 	if err != nil {
 		return nil, err
 	}
+	// Query results land in a lazily-materialized anonymous table; a read
+	// session against one (e.g. the python client's to_dataframe with the
+	// storage API) must materialize it first — the gRPC surface bypasses
+	// the HTTP middleware that normally does this.
+	if err := s.server.materializeAnonTable(ctx, projectID, datasetID); err != nil {
+		return nil, fmt.Errorf("failed to materialize anonymous result table: %w", err)
+	}
 	tableMetadata, err := getTableMetadata(ctx, s.server, projectID, datasetID, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get table metadata: %w", err)

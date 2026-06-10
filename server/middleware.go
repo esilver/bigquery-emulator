@@ -6,12 +6,12 @@ import (
 	"net/http"
 	"runtime"
 	"strings"
-	"sync"
 
 	"github.com/gorilla/mux"
 	"go.uber.org/zap"
 
 	"github.com/goccy/bigquery-emulator/internal/logger"
+	"github.com/goccy/bigquery-emulator/internal/metadata"
 )
 
 // methodOverrideMiddleware honors the X-HTTP-Method-Override header on POST
@@ -29,12 +29,77 @@ func methodOverrideMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func sequentialAccessMiddleware() func(http.Handler) http.Handler {
-	var mu sync.Mutex
+// sequentialAccessMiddleware serializes request handling on the server-wide
+// seqMu — the historical behaviour of the emulator — EXCEPT for the async
+// query-job routes, which manage their own locking:
+//
+//   - jobs.insert returns immediately while the query runs in a job
+//     goroutine; the handler takes seqMu only around its (cheap) metadata
+//     writes, so concurrent SELECT jobs overlap (issue #3).
+//   - jobs.getQueryResults parks the request until the job completes or
+//     timeoutMs elapses (server-side long poll). Holding a global lock while
+//     parked would deadlock the server.
+//   - jobs.get is a read-only status poll and must stay responsive while
+//     jobs run.
+func sequentialAccessMiddleware(s *Server) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			mu.Lock()
-			defer mu.Unlock()
+			if asyncJobRoute(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			s.seqMu.Lock()
+			defer s.seqMu.Unlock()
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// asyncJobRoute reports whether the request is one of the three query-job
+// routes that bypass the global serialization middleware. Routes are
+// registered both bare and under the /bigquery/v2 prefix, so match on the
+// template suffix.
+func asyncJobRoute(r *http.Request) bool {
+	route := mux.CurrentRoute(r)
+	if route == nil {
+		return false
+	}
+	template, err := route.GetPathTemplate()
+	if err != nil {
+		return false
+	}
+	// Strip the optional API prefix; the media-upload route
+	// (/upload/bigquery/v2/...) must NOT match — it stays serialized.
+	template = strings.TrimPrefix(template, "/bigquery/v2")
+	switch {
+	case r.Method == http.MethodPost && template == "/projects/{projectId}/jobs":
+		return true // jobs.insert
+	case r.Method == http.MethodGet && template == "/projects/{projectId}/jobs/{jobId}":
+		return true // jobs.get
+	case r.Method == http.MethodGet && template == "/projects/{projectId}/queries/{jobId}":
+		return true // jobs.getQueryResults
+	}
+	return false
+}
+
+// anonTableMaterializeMiddleware materializes a lazily-deferred anonymous
+// query-result table the moment a client addresses its dataset (tables.get,
+// tabledata.list, datasets.get, ...). It runs OUTSIDE the serialization
+// middleware because materialization takes seqMu itself.
+func anonTableMaterializeMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+			params := mux.Vars(r)
+			projectID, hasProject := projectIDFromParams(params)
+			datasetID, hasDataset := datasetIDFromParams(params)
+			if hasProject && hasDataset {
+				server := serverFromContext(ctx)
+				if err := server.materializeAnonTable(ctx, projectID, datasetID); err != nil {
+					errorResponse(ctx, w, errJobInternalError(err.Error()))
+					return
+				}
+			}
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -183,6 +248,21 @@ func withProjectMiddleware() func(http.Handler) http.Handler {
 			projectID, exists := projectIDFromParams(params)
 			if exists {
 				server := serverFromContext(ctx)
+				// Fast path for polling a live (in-process) query job:
+				// jobs.get and getQueryResults only need the project ID and
+				// the job itself, and hydrating the project from the
+				// metadata store would block behind whatever statement the
+				// engine is currently executing — which would break the
+				// long-poll guarantee that getQueryResults answers within
+				// ~timeoutMs.
+				if jobID, ok := jobIDFromParams(params); ok && r.Method == http.MethodGet {
+					if live := server.liveJob(projectID, jobID); live != nil {
+						ctx = withProject(ctx, metadata.NewProject(server.metaRepo, projectID, nil, nil))
+						ctx = withJob(ctx, live)
+						next.ServeHTTP(w, r.WithContext(ctx))
+						return
+					}
+				}
 				project, err := server.metaRepo.FindProject(ctx, projectID)
 				if err != nil {
 					w.WriteHeader(http.StatusInternalServerError)
@@ -232,9 +312,15 @@ func withJobMiddleware() func(http.Handler) http.Handler {
 			ctx := r.Context()
 			params := mux.Vars(r)
 			jobID, exists := jobIDFromParams(params)
-			if exists {
+			if exists && !jobInContext(ctx) {
 				project := projectFromContext(ctx)
-				job := project.Job(jobID)
+				// Prefer the live in-process instance of an async query
+				// job: it carries the completion channel the long-poll
+				// parks on (the hydrated copy is a point-in-time snapshot).
+				job := serverFromContext(ctx).liveJob(project.ID, jobID)
+				if job == nil {
+					job = project.Job(jobID)
+				}
 				if job == nil {
 					errorResponse(ctx, w, errNotFound(fmt.Sprintf("job %s is not found", jobID)))
 					return

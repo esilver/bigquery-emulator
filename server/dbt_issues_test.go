@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goccy/bigquery-emulator/server"
 	"github.com/goccy/bigquery-emulator/types"
@@ -66,6 +67,39 @@ func insertQueryJob(t *testing.T, baseURL, jobID, query string) (int, map[string
 		jobID, query,
 	)
 	return httpJSON(t, "POST", fmt.Sprintf("%s/bigquery/v2/projects/test/jobs", baseURL), body, nil)
+}
+
+// awaitQueryJob observes job completion exactly the way real clients do
+// since the async jobs.insert change (issue #3): getQueryResults long-polls
+// until the job completes (a failed job surfaces as an HTTP error body
+// without jobComplete), then jobs.get returns the final job resource with
+// its full statistics.
+func awaitQueryJob(t *testing.T, baseURL, jobID string) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		_, res := httpJSON(t, "GET",
+			fmt.Sprintf("%s/bigquery/v2/projects/test/queries/%s?timeoutMs=10000&maxResults=0", baseURL, jobID), "", nil)
+		if complete, ok := res["jobComplete"].(bool); !ok || complete {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job %s did not complete in time", jobID)
+		}
+	}
+	_, job := httpJSON(t, "GET",
+		fmt.Sprintf("%s/bigquery/v2/projects/test/jobs/%s", baseURL, jobID), "", nil)
+	return job
+}
+
+// jobState extracts status.state from a job resource.
+func jobState(res map[string]any) string {
+	status := lookupMap(res, "status")
+	if status == nil {
+		return ""
+	}
+	state, _ := status["state"].(string)
+	return state
 }
 
 // syncQuery posts to jobs.query (the synchronous /queries endpoint).
@@ -137,9 +171,16 @@ func TestQueryJobStatementType(t *testing.T) {
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			code, res := insertQueryJob(t, ts.URL, fmt.Sprintf("sttype-%d", i), tc.query)
+			jobID := fmt.Sprintf("sttype-%d", i)
+			code, res := insertQueryJob(t, ts.URL, jobID, tc.query)
 			if code != http.StatusOK {
 				t.Fatalf("jobs.insert %q: status %d: %v", tc.query, code, res)
+			}
+			// jobs.insert is async (issue #3): a slower statement answers
+			// with a non-terminal state, and the final statistics
+			// (ddlTargetTable in particular) land with completion.
+			if jobState(res) != "DONE" {
+				res = awaitQueryJob(t, ts.URL, jobID)
 			}
 			if errResult := lookupMap(res, "status", "errorResult"); errResult != nil && !tc.allowJobError {
 				t.Fatalf("jobs.insert %q: job failed: %v", tc.query, errResult)
@@ -188,18 +229,24 @@ func TestJobsInsertWithoutJobReference(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("jobs.insert without jobReference: status = %d, want 200: %v", code, res)
 	}
-	if errResult := lookupMap(res, "status", "errorResult"); errResult != nil {
-		t.Fatalf("job failed: %v", errResult)
-	}
 	jobRef := lookupMap(res, "jobReference")
 	if jobRef == nil {
 		t.Fatalf("response missing generated jobReference: %v", res)
 	}
-	if jobID, _ := jobRef["jobId"].(string); jobID == "" {
+	jobID, _ := jobRef["jobId"].(string)
+	if jobID == "" {
 		t.Errorf("generated jobReference.jobId is empty: %v", jobRef)
 	}
 	if projectID, _ := jobRef["projectId"].(string); projectID != "test" {
 		t.Errorf("generated jobReference.projectId = %q, want \"test\"", projectID)
+	}
+	// jobs.insert is async (issue #3): observe completion through the
+	// getQueryResults long poll before asserting on the final job.
+	if jobState(res) != "DONE" {
+		res = awaitQueryJob(t, ts.URL, jobID)
+	}
+	if errResult := lookupMap(res, "status", "errorResult"); errResult != nil {
+		t.Fatalf("job failed: %v", errResult)
 	}
 	stats := lookupMap(res, "statistics", "query")
 	if got, _ := stats["statementType"].(string); got != "CREATE_TABLE" {

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -33,6 +34,35 @@ type Server struct {
 	httpServer     *http.Server
 	grpcServer     *grpc.Server
 	listenCallback func(httpAddr, grpcAddr string)
+
+	// seqMu serializes every state-mutating code path (it replaces the old
+	// per-request global mutex). Handlers other than the async query-job
+	// routes still take it for their whole request via
+	// sequentialAccessMiddleware; the async jobs.insert path and its job
+	// goroutines take it only around their metadata/engine write sections,
+	// so concurrent read-only (SELECT) query jobs overlap freely.
+	seqMu sync.Mutex
+
+	// Live query jobs (and a bounded ring of recently completed ones),
+	// keyed by projectID/jobID. getQueryResults long-polls the live
+	// instance; once a job is evicted its persisted row serves the reads.
+	jobsMu        sync.Mutex
+	liveJobs      map[string]*metadata.Job
+	completedRing []string
+
+	// Anonymous query results that have not been materialized into a real
+	// destination table yet, keyed by projectID/datasetID (the dataset is
+	// named after the job). Materialization happens lazily, the first time
+	// a client addresses the destination table (tables.get, tabledata.list,
+	// a query referencing it) — see anonTableMaterializeMiddleware.
+	anonMu     sync.Mutex
+	anonTables map[string]string // projectID/datasetID -> jobID
+
+	// Async job goroutines: tracked so Close can drain them, canceled on
+	// shutdown through jobsCtx.
+	jobWG      sync.WaitGroup
+	jobsCtx    context.Context
+	jobsCancel context.CancelFunc
 }
 
 // SetListenCallback registers a function invoked once the HTTP and gRPC
@@ -44,7 +74,12 @@ func (s *Server) SetListenCallback(callback func(httpAddr, grpcAddr string)) {
 }
 
 func New(storage Storage) (*Server, error) {
-	server := &Server{storage: storage}
+	server := &Server{
+		storage:    storage,
+		liveJobs:   map[string]*metadata.Job{},
+		anonTables: map[string]string{},
+	}
+	server.jobsCtx, server.jobsCancel = context.WithCancel(context.Background())
 	if storage == TempStorage {
 		f, err := os.CreateTemp("", "")
 		if err != nil {
@@ -105,12 +140,15 @@ func New(storage Storage) (*Server, error) {
 	r.Handle(uploadAPIEndpoint, &uploadHandler{}).Methods("POST")
 	r.Handle(uploadAPIEndpoint, &uploadContentHandler{}).Methods("PUT")
 	r.PathPrefix("/").Handler(&defaultHandler{})
-	r.Use(sequentialAccessMiddleware())
 	r.Use(recoveryMiddleware(server))
 	r.Use(loggerMiddleware(server))
 	r.Use(accessLogMiddleware())
 	r.Use(decompressMiddleware())
 	r.Use(withServerMiddleware(server))
+	// Lazy anonymous-result materialization must run before the
+	// serialization middleware: it takes seqMu itself.
+	r.Use(anonTableMaterializeMiddleware())
+	r.Use(sequentialAccessMiddleware(server))
 	r.Use(withProjectMiddleware())
 	r.Use(withDatasetMiddleware())
 	r.Use(withJobMiddleware())
@@ -131,6 +169,24 @@ func (s *Server) Close() error {
 			}
 		}
 	}()
+	// Drain the async job goroutines before the database goes away
+	// underneath them. Let in-flight queries finish first (canceling them
+	// force-closes their driver connections mid-statement, which surfaces
+	// as spurious close errors — the old synchronous handler likewise
+	// finished its query before the server could be closed); cancellation
+	// is the escape hatch for a hung query.
+	drained := make(chan struct{})
+	go func() {
+		s.jobWG.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-time.After(30 * time.Second):
+		s.jobsCancel()
+		<-drained
+	}
+	s.jobsCancel()
 	if err := s.db.Close(); err != nil {
 		log.Printf("failed to close database: %s", err.Error())
 		return err

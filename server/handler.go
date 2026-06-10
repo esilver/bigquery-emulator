@@ -1079,7 +1079,9 @@ func (h *jobsCancelHandler) Handle(ctx context.Context, r *jobsCancelRequest) (*
 	if err := r.job.Cancel(ctx); err != nil {
 		return nil, err
 	}
-	return &bigqueryv2.JobCancelResponse{Job: r.job.Content()}, nil
+	// r.job may be the live instance of a running job (the middleware
+	// prefers it); snapshot so encoding does not race its completion.
+	return &bigqueryv2.JobCancelResponse{Job: r.job.ContentSnapshot()}, nil
 }
 
 func (h *jobsDeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1146,9 +1148,24 @@ type jobsGetRequest struct {
 }
 
 func (h *jobsGetHandler) Handle(ctx context.Context, r *jobsGetRequest) (*bigqueryv2.Job, error) {
-	content := *r.job.Content()
-	content.Status = &bigqueryv2.JobStatus{State: "DONE"}
-	return &content, nil
+	// Query jobs run asynchronously; report the live state while one is in
+	// flight. jobs.get stays a plain poll (no long-poll semantics): the
+	// python client only falls back to it when getQueryResults is not
+	// applicable.
+	job := r.job
+	if live := r.server.liveJob(r.project.ID, r.job.ID); live != nil {
+		job = live
+	}
+	content := job.ContentSnapshot()
+	if content == nil {
+		content = &bigqueryv2.Job{}
+	}
+	if content.Status == nil {
+		// Jobs persisted by code paths that never tracked a state (load
+		// jobs, YAML-loaded fixtures) were always reported DONE.
+		content.Status = &bigqueryv2.JobStatus{State: "DONE"}
+	}
+	return content, nil
 }
 
 func (h *jobsGetQueryResultsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1162,6 +1179,18 @@ func (h *jobsGetQueryResultsHandler) ServeHTTP(w http.ResponseWriter, r *http.Re
 	if token, ok := parseQueryValueAsUint64(r, "pageToken"); ok {
 		startIndex = token
 	}
+	// getQueryResults is a server-side long poll: the request parks until
+	// the job completes or timeoutMs (default 10s) elapses, and only then
+	// answers jobComplete=false. Answering false immediately would push
+	// clients (the python one in particular) into multi-second client-side
+	// backoff sleeps.
+	timeout := defaultGetQueryResultsTimeout
+	if timeoutMs, ok := parseQueryValueAsUint64(r, "timeoutMs"); ok {
+		timeout = time.Duration(timeoutMs) * time.Millisecond
+		if timeout > maxGetQueryResultsTimeout {
+			timeout = maxGetQueryResultsTimeout
+		}
+	}
 	res, err := h.Handle(ctx, &jobsGetQueryResultsRequest{
 		server:            server,
 		project:           project,
@@ -1170,9 +1199,12 @@ func (h *jobsGetQueryResultsHandler) ServeHTTP(w http.ResponseWriter, r *http.Re
 		maxResults:        maxResults,
 		hasMaxResults:     hasMaxResults,
 		startIndex:        startIndex,
+		timeout:           timeout,
 	})
 	if err != nil {
-		errorResponse(ctx, w, errJobInternalError(err.Error()))
+		// Keep the typed error of a failed job (e.g. 404 notFound for a
+		// CREATE_NEVER destination): clients branch on the reason/code.
+		errorResponse(ctx, w, jobErrorProto(err))
 		return
 	}
 	encodeResponse(ctx, w, res)
@@ -1186,12 +1218,32 @@ type jobsGetQueryResultsRequest struct {
 	maxResults        uint64
 	hasMaxResults     bool
 	startIndex        uint64
+	timeout           time.Duration
 }
 
 func (h *jobsGetQueryResultsHandler) Handle(ctx context.Context, r *jobsGetQueryResultsRequest) (*internaltypes.GetQueryResultsResponse, error) {
-	response, err := r.job.Wait(ctx)
+	job := r.job
+	if live := r.server.liveJob(r.project.ID, r.job.ID); live != nil {
+		job = live
+	}
+	response, jobErr, completed, err := job.WaitForResult(ctx, r.timeout)
 	if err != nil {
 		return nil, err
+	}
+	if !completed {
+		return &internaltypes.GetQueryResultsResponse{
+			JobReference: &bigqueryv2.JobReference{
+				ProjectId: r.project.ID,
+				JobId:     r.job.ID,
+			},
+			JobComplete: false,
+		}, nil
+	}
+	if jobErr != nil {
+		return nil, jobErr
+	}
+	if response == nil {
+		response = &internaltypes.QueryResponse{}
 	}
 	rows := internaltypes.Format(response.Schema, response.Rows, r.useInt64Timestamp)
 
@@ -1279,7 +1331,7 @@ type jobsInsertRequest struct {
 	job     *bigqueryv2.Job
 }
 
-func (h *jobsInsertHandler) tableDefFromQueryResponse(tableID string, response *internaltypes.QueryResponse) (*types.Table, error) {
+func tableDefFromQueryResponse(tableID string, response *internaltypes.QueryResponse) (*types.Table, error) {
 	columns := []*types.Column{}
 	for _, field := range response.Schema.Fields {
 		columns = append(columns, types.NewColumnWithSchema(field))
@@ -1659,6 +1711,11 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 		job.JobReference.JobId = randomID()
 	}
 	if job.Configuration.Query == nil {
+		// The load/extract paths execute synchronously and mutate metadata
+		// and content state; they ran under the global request mutex before
+		// the jobs.insert route bypassed it, so serialize them here.
+		r.server.seqMu.Lock()
+		defer r.server.seqMu.Unlock()
 		if job.Configuration.Load != nil && len(job.Configuration.Load.SourceUris) != 0 {
 			// load from google cloud storage
 			job, err := h.importFromGCS(ctx, r)
@@ -1675,6 +1732,52 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 		}
 		return nil, fmt.Errorf("unspecified job configuration query")
 	}
+
+	job.Kind = "bigquery#job"
+	job.Configuration.JobType = "QUERY"
+	job.Configuration.Query.Priority = "INTERACTIVE"
+	job.SelfLink = fmt.Sprintf(
+		"http://%s/bigquery/v2/projects/%s/jobs/%s",
+		r.server.httpServer.Addr,
+		r.project.ID,
+		job.JobReference.JobId,
+	)
+
+	// A dry run never has side effects and clients read its statistics from
+	// the insert response, so it stays synchronous: run the query, roll the
+	// transaction back, report DONE.
+	if job.Configuration.DryRun {
+		return h.handleDryRun(ctx, r)
+	}
+
+	// Query jobs execute asynchronously (issue #3): persist the job in a
+	// running state, launch the job goroutine, and give fast queries a
+	// short grace to answer DONE the way the old synchronous handler did.
+	// Everyone else sees a non-terminal state and observes completion
+	// through the getQueryResults long poll (or a jobs.get poll).
+	now := time.Now()
+	job.Status = &bigqueryv2.JobStatus{State: "RUNNING"}
+	job.Statistics = &bigqueryv2.JobStatistics{
+		CreationTime: now.Unix(),
+		StartTime:    now.Unix(),
+		// The statement type is known before execution (clients such as
+		// dbt-bigquery branch on it); completion refines the rest of the
+		// query statistics (ddlTargetTable, bytes).
+		Query: queryJobStatistics(job.Configuration.Query.Query, nil, 0),
+	}
+	pendingJob := metadata.NewPendingJob(r.server.metaRepo, r.project.ID, job.JobReference.JobId, job)
+	if err := r.server.registerAndPersistJob(ctx, r.project.ID, pendingJob); err != nil {
+		return nil, fmt.Errorf("failed to add job: %w", err)
+	}
+	r.server.startQueryJob(pendingJob)
+	_, _, _, _ = pendingJob.WaitForResult(ctx, insertDoneGrace)
+	return pendingJob.ContentSnapshot(), nil
+}
+
+// handleDryRun executes a dry-run query job synchronously and side-effect
+// free: the transaction is always rolled back and no job is recorded.
+func (h *jobsInsertHandler) handleDryRun(ctx context.Context, r *jobsInsertRequest) (*bigqueryv2.Job, error) {
+	job := r.job
 	conn, err := r.server.connMgr.Connection(ctx, r.project.ID, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get connection: %w", err)
@@ -1684,7 +1787,6 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 		return nil, fmt.Errorf("failed to start transaction: %w", err)
 	}
 	defer tx.RollbackIfNotCommitted()
-	hasDestinationTable := job.Configuration.Query.DestinationTable != nil
 	startTime := time.Now()
 	response, jobErr := r.server.contentRepo.Query(
 		ctx,
@@ -1699,70 +1801,6 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 	if response != nil {
 		totalBytes = response.TotalBytes
 	}
-	queryStats := queryJobStatistics(job.Configuration.Query.Query, response, totalBytes)
-	if jobErr == nil {
-		if hasDestinationTable {
-			// insert results to destination table
-			tableRef := job.Configuration.Query.DestinationTable
-			tableDef, err := h.tableDefFromQueryResponse(tableRef.TableId, response)
-			if err != nil {
-				return nil, err
-			}
-			destinationDataset := r.project.Dataset(tableRef.DatasetId)
-			if destinationDataset == nil {
-				return nil, fmt.Errorf("failed to find destination dataset: %s", tableRef.DatasetId)
-			}
-			destinationTable := destinationDataset.Table(tableRef.TableId)
-			destinationTableExists := destinationTable != nil
-			if !destinationTableExists {
-				// CreateDisposition controls whether a missing destination
-				// table is materialized on the fly. CREATE_NEVER must
-				// surface the missing table as a 404 (matching real
-				// BigQuery and load-job behaviour); CREATE_IF_NEEDED (the
-				// default) and an empty value create it from the query's
-				// inferred schema.
-				if job.Configuration.Query.CreateDisposition == "CREATE_NEVER" {
-					return nil, errNotFound(fmt.Sprintf(
-						"Not found: Table %s:%s.%s",
-						tableRef.ProjectId, tableRef.DatasetId, tableRef.TableId,
-					))
-				}
-				_, err := createTableMetadata(ctx, tx, r.server, r.project, destinationDataset, tableDef.ToBigqueryV2(r.project.ID, tableRef.DatasetId))
-				if err != nil {
-					return nil, fmt.Errorf("failed to create table: %w", err)
-				}
-				serverErr := r.server.contentRepo.CreateTable(ctx, tx, tableDef.ToBigqueryV2(r.project.ID, tableRef.DatasetId))
-				if serverErr != nil {
-					return nil, fmt.Errorf("failed to create table: %w", serverErr)
-				}
-			}
-			if err := r.server.contentRepo.AddTableData(ctx, tx, tableRef.ProjectId, tableRef.DatasetId, tableDef); err != nil {
-				return nil, fmt.Errorf("failed to add table data: %w", err)
-			}
-		} else if queryStats.StatementType == "SELECT" && response != nil && response.Schema != nil && len(response.Schema.Fields) > 0 {
-			// A query that produces a result set (a SELECT, as opposed to a
-			// DDL/DML statement that has no result schema) still gets an
-			// anonymous results table. The job must advertise it through
-			// configuration.query.destinationTable: clients such as the Ruby
-			// one read query results through that reference. DDL jobs must
-			// NOT carry a destination table: dbt-bigquery branches on
-			// statementType and only resolves the destination for SELECT.
-			destRef, err := h.addQueryResultToDynamicDestinationTable(ctx, tx, r, response)
-			if err != nil {
-				return nil, fmt.Errorf("failed to add query result to dynamic destination table: %w", err)
-			}
-			job.Configuration.Query.DestinationTable = destRef
-		}
-	}
-	job.Kind = "bigquery#job"
-	job.Configuration.JobType = "QUERY"
-	job.Configuration.Query.Priority = "INTERACTIVE"
-	job.SelfLink = fmt.Sprintf(
-		"http://%s/bigquery/v2/projects/%s/jobs/%s",
-		r.server.httpServer.Addr,
-		r.project.ID,
-		job.JobReference.JobId,
-	)
 	status := &bigqueryv2.JobStatus{State: "DONE"}
 	if jobErr != nil {
 		jobProtoErr := jobErrorProto(jobErr)
@@ -1771,37 +1809,12 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 	}
 	job.Status = status
 	job.Statistics = &bigqueryv2.JobStatistics{
-		Query:               queryStats,
+		Query:               queryJobStatistics(job.Configuration.Query.Query, response, totalBytes),
 		CreationTime:        startTime.Unix(),
 		StartTime:           startTime.Unix(),
 		EndTime:             endTime.Unix(),
 		TotalBytesProcessed: totalBytes,
 	}
-	if err := r.project.AddJob(
-		ctx,
-		tx.Tx(),
-		metadata.NewJob(
-			r.server.metaRepo,
-			r.project.ID,
-			job.JobReference.JobId,
-			job,
-			response,
-			jobErr,
-		),
-	); err != nil {
-		return nil, fmt.Errorf("failed to add job: %w", err)
-	}
-	if !job.Configuration.DryRun {
-		if err := tx.Commit(); err != nil {
-			return nil, fmt.Errorf("failed to commit job: %w", err)
-		}
-		if response != nil && response.ChangedCatalog.Changed() {
-			if err := syncCatalog(ctx, r.server, response.ChangedCatalog); err != nil {
-				return nil, err
-			}
-		}
-	}
-
 	return job, nil
 }
 
@@ -1930,55 +1943,6 @@ func deleteTableMetadata(ctx context.Context, server *Server, spec *googlesqlite
 		return err
 	}
 	return nil
-}
-
-// addQueryResultToDynamicDestinationTable materializes the result of a query
-// that had no explicit destination into an anonymous results table (named
-// after the job id) and returns a reference to it.
-func (h *jobsInsertHandler) addQueryResultToDynamicDestinationTable(ctx context.Context, tx *connection.Tx, r *jobsInsertRequest, response *internaltypes.QueryResponse) (*bigqueryv2.TableReference, error) {
-	projectID := r.project.ID
-	jobID := r.job.JobReference.JobId
-	datasetID := jobID
-	tableID := jobID
-
-	tableDef, err := h.tableDefFromQueryResponse(tableID, response)
-	if err != nil {
-		return nil, err
-	}
-	tableDef.SetupMetadata(projectID, datasetID)
-	table := metadata.NewTable(r.server.metaRepo, projectID, datasetID, tableID, tableDef.Metadata)
-	dataset := metadata.NewDataset(
-		r.server.metaRepo,
-		projectID,
-		datasetID,
-		&bigqueryv2.Dataset{
-			Id: fmt.Sprintf("%s:%s", projectID, datasetID),
-			DatasetReference: &bigqueryv2.DatasetReference{
-				ProjectId: projectID,
-				DatasetId: datasetID,
-			},
-		},
-		[]*metadata.Table{table},
-		nil,
-		nil,
-	)
-	if err := r.project.AddDataset(ctx, tx.Tx(), dataset); err != nil {
-		return nil, err
-	}
-	if err := r.server.metaRepo.AddTable(ctx, tx.Tx(), table); err != nil {
-		return nil, err
-	}
-	if err := r.server.contentRepo.CreateTable(ctx, tx, tableDef.ToBigqueryV2(projectID, datasetID)); err != nil {
-		return nil, err
-	}
-	if err := r.server.contentRepo.AddTableData(ctx, tx, projectID, datasetID, tableDef); err != nil {
-		return nil, fmt.Errorf("failed to add table data: %w", err)
-	}
-	return &bigqueryv2.TableReference{
-		ProjectId: projectID,
-		DatasetId: datasetID,
-		TableId:   tableID,
-	}, nil
 }
 
 func (h *jobsListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

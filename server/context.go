@@ -48,6 +48,14 @@ func jobFromContext(ctx context.Context) *metadata.Job {
 	return ctx.Value(jobKey{}).(*metadata.Job)
 }
 
+// jobInContext reports whether a job was already injected (e.g. by the
+// live-job fast path in withProjectMiddleware) without panicking when none
+// was.
+func jobInContext(ctx context.Context) bool {
+	job, ok := ctx.Value(jobKey{}).(*metadata.Job)
+	return ok && job != nil
+}
+
 func withTable(ctx context.Context, table *metadata.Table) context.Context {
 	return context.WithValue(ctx, tableKey{}, table)
 }
