@@ -202,14 +202,19 @@ func (s *Server) runQueryJob(job *metadata.Job) {
 		return
 	}
 	defer tx.RollbackIfNotCommitted()
-	response, jobErr = s.contentRepo.Query(
-		ctx,
-		tx,
-		job.ProjectID,
-		"",
-		query,
-		queryConfig.QueryParameters,
-	)
+	// DROP SCHEMA is not supported by the dialect layer yet; execute it at
+	// the emulator layer instead (issue #8).
+	response, jobErr = handleDropSchemaQuery(ctx, s, job.ProjectID, query, false)
+	if jobErr == nil && response == nil {
+		response, jobErr = s.contentRepo.Query(
+			ctx,
+			tx,
+			job.ProjectID,
+			"",
+			query,
+			queryConfig.QueryParameters,
+		)
+	}
 	if jobErr == nil && hasDestinationTable {
 		jobErr = s.insertQueryResultIntoDestinationTable(ctx, tx, job, response)
 	}
@@ -225,6 +230,12 @@ func (s *Server) runQueryJob(job *metadata.Job) {
 			jobErr = err
 			return
 		}
+	}
+	// CREATE SCHEMA reaches the engine but is invisible in ChangedCatalog;
+	// register the dataset in the metadata repository (issue #8).
+	if err := syncSchemaDDL(ctx, s, job.ProjectID, stmtType, query); err != nil {
+		jobErr = err
+		return
 	}
 	if !hasDestinationTable && stmtType == "SELECT" &&
 		response != nil && response.Schema != nil && len(response.Schema.Fields) > 0 {

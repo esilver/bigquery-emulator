@@ -223,6 +223,99 @@ func ddlTargetTable(cc *googlesqlite.ChangedCatalog) *bigqueryv2.TableReference 
 	return nil
 }
 
+// schemaDDLTargetPath extracts the case-preserved name path of the schema
+// targeted by a CREATE/DROP/ALTER SCHEMA statement: "d2" -> [d2],
+// "proj.d2" -> [proj, d2], "`proj.d2`" -> [proj, d2]. It returns nil when
+// the statement is not a schema DDL or the name cannot be parsed.
+func schemaDDLTargetPath(query string) []string {
+	s := query
+	i, n := 0, len(s)
+	skip := func() { // whitespace and comments
+		for i < n {
+			c := s[i]
+			switch {
+			case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+				i++
+			case c == '-' && i+1 < n && s[i+1] == '-':
+				for i < n && s[i] != '\n' {
+					i++
+				}
+			case c == '#':
+				for i < n && s[i] != '\n' {
+					i++
+				}
+			case c == '/' && i+1 < n && s[i+1] == '*':
+				end := strings.Index(s[i+2:], "*/")
+				if end < 0 {
+					i = n
+					return
+				}
+				i += 2 + end + 2
+			default:
+				return
+			}
+		}
+	}
+	word := func() string {
+		if i >= n || !isWordStart(s[i]) {
+			return ""
+		}
+		j := i
+		for j < n && isWordChar(s[j]) {
+			j++
+		}
+		w := s[i:j]
+		i = j
+		return w
+	}
+	skip()
+	switch strings.ToUpper(word()) {
+	case "CREATE", "DROP", "ALTER":
+	default:
+		return nil
+	}
+	skip()
+	if strings.ToUpper(word()) != "SCHEMA" {
+		return nil
+	}
+	// Optional IF [NOT] EXISTS. The keywords are reserved, so a schema
+	// actually named "exists" would be backtick-quoted and unaffected.
+	for {
+		skip()
+		save := i
+		switch strings.ToUpper(word()) {
+		case "IF", "NOT", "EXISTS":
+			continue
+		default:
+			i = save
+		}
+		break
+	}
+	var parts []string
+	for {
+		skip()
+		if i < n && s[i] == '`' {
+			end := strings.IndexByte(s[i+1:], '`')
+			if end < 0 {
+				return nil
+			}
+			parts = append(parts, strings.Split(s[i+1:i+1+end], ".")...)
+			i += 1 + end + 1
+		} else if w := word(); w != "" {
+			parts = append(parts, w)
+		} else {
+			break
+		}
+		skip()
+		if i < n && s[i] == '.' {
+			i++
+			continue
+		}
+		break
+	}
+	return parts
+}
+
 // scanLeadingTokens returns up to max uppercased keyword/identifier tokens
 // from the start of a statement. Comments are skipped; quoted strings,
 // backtick identifiers and balanced parenthesized groups (column lists,

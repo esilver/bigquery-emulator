@@ -534,3 +534,175 @@ func TestCreateOrReplaceAcrossReopen(t *testing.T) {
 		}
 	}
 }
+
+// Issue #8: CREATE SCHEMA / DROP SCHEMA executed as SQL through the query
+// paths must keep the metadata repository in sync — the dataset must be
+// resolvable by follow-on statements, appear in datasets.list, and disappear
+// on DROP SCHEMA.
+func TestSchemaDDLThroughQueries(t *testing.T) {
+	testServer := newDBTTestServer(t)
+	base := testServer.URL
+
+	datasetsList := func() string {
+		t.Helper()
+		code, res := httpJSON(t, http.MethodGet,
+			base+"/bigquery/v2/projects/test/datasets", "", nil)
+		if code != http.StatusOK {
+			t.Fatalf("datasets.list: %d %v", code, res)
+		}
+		return fmt.Sprint(res)
+	}
+
+	// CREATE SCHEMA through the synchronous query path.
+	if code, res := syncQuery(t, base, "CREATE SCHEMA d2"); code != http.StatusOK {
+		t.Fatalf("CREATE SCHEMA: %d %v", code, res)
+	}
+	// The very next statement must resolve the dataset.
+	if code, res := syncQuery(t, base, "CREATE TABLE d2.t1 AS SELECT 1 AS x"); code != http.StatusOK {
+		t.Fatalf("CREATE TABLE in SQL-created schema: %d %v", code, res)
+	}
+	if list := datasetsList(); !strings.Contains(list, "d2") {
+		t.Fatalf("datasets.list does not show SQL-created dataset d2: %s", list)
+	}
+
+	// Same through jobs.insert (async since issue #3: await completion).
+	code, res := insertQueryJob(t, base, "job-create-schema", "CREATE SCHEMA d2b")
+	if code != http.StatusOK {
+		t.Fatalf("jobs.insert CREATE SCHEMA: %d %v", code, res)
+	}
+	if jobState(res) != "DONE" {
+		res = awaitQueryJob(t, base, "job-create-schema")
+	}
+	if errResult := lookupMap(res, "status", "errorResult"); errResult != nil {
+		t.Fatalf("jobs.insert CREATE SCHEMA failed: %v", errResult)
+	}
+	if list := datasetsList(); !strings.Contains(list, "d2b") {
+		t.Fatalf("datasets.list does not show jobs.insert-created dataset d2b: %s", list)
+	}
+
+	// DROP SCHEMA of an empty dataset deregisters it.
+	if code, res := syncQuery(t, base, "DROP SCHEMA d2b"); code != http.StatusOK {
+		t.Fatalf("DROP SCHEMA d2b: %d %v", code, res)
+	}
+	if list := datasetsList(); strings.Contains(list, "d2b") {
+		t.Fatalf("datasets.list still shows dropped dataset d2b: %s", list)
+	}
+
+	// A non-empty dataset requires CASCADE.
+	if code, _ := syncQuery(t, base, "DROP SCHEMA d2"); code == http.StatusOK {
+		t.Fatal("DROP SCHEMA of a non-empty dataset without CASCADE must fail")
+	}
+	if code, res := syncQuery(t, base, "DROP SCHEMA d2 CASCADE"); code != http.StatusOK {
+		t.Fatalf("DROP SCHEMA CASCADE: %d %v", code, res)
+	}
+	if list := datasetsList(); strings.Contains(list, `"d2"`) {
+		t.Fatalf("datasets.list still shows cascade-dropped dataset d2: %s", list)
+	}
+	if code, _ := syncQuery(t, base, "SELECT x FROM d2.t1"); code == http.StatusOK {
+		t.Fatal("table survived DROP SCHEMA CASCADE")
+	}
+
+	// IF EXISTS on a missing dataset is a no-op success; without it the
+	// drop errors.
+	if code, res := syncQuery(t, base, "DROP SCHEMA IF EXISTS d2"); code != http.StatusOK {
+		t.Fatalf("DROP SCHEMA IF EXISTS on missing dataset: %d %v", code, res)
+	}
+	if code, _ := syncQuery(t, base, "DROP SCHEMA d2"); code == http.StatusOK {
+		t.Fatal("DROP SCHEMA of a missing dataset must fail")
+	}
+
+	// The name can be recreated and used again.
+	if code, res := syncQuery(t, base, "CREATE SCHEMA d2"); code != http.StatusOK {
+		t.Fatalf("re-CREATE SCHEMA after drop: %d %v", code, res)
+	}
+	if code, res := syncQuery(t, base, "CREATE TABLE d2.t1 AS SELECT 7 AS x"); code != http.StatusOK {
+		t.Fatalf("CREATE TABLE in re-created schema: %d %v", code, res)
+	}
+}
+
+// Issue #9: after CREATE OR REPLACE the analyzer must resolve the new
+// definition — querying the replaced view/table by its new column must work
+// (previously: "Unrecognized name" from a stale analyzer catalog entry).
+func TestCreateOrReplaceResolvesNewSchema(t *testing.T) {
+	testServer := newDBTTestServer(t)
+	base := testServer.URL
+	mustCreateDataset(t, base, "d3")
+
+	if code, res := syncQuery(t, base, "CREATE VIEW d3.w1 AS SELECT 1 AS a"); code != http.StatusOK {
+		t.Fatalf("CREATE VIEW: %d %v", code, res)
+	}
+	if code, res := syncQuery(t, base, "SELECT a FROM d3.w1"); code != http.StatusOK {
+		t.Fatalf("initial view read: %d %v", code, res)
+	}
+	if code, res := syncQuery(t, base, "CREATE OR REPLACE VIEW d3.w1 AS SELECT 2 AS b"); code != http.StatusOK {
+		t.Fatalf("CREATE OR REPLACE VIEW: %d %v", code, res)
+	}
+	code, res := syncQuery(t, base, "SELECT b FROM d3.w1")
+	if code != http.StatusOK {
+		t.Fatalf("SELECT new column from replaced view: %d %v", code, res)
+	}
+	if rows := queryRows(t, res); len(rows) != 1 || rows[0][0] != "2" {
+		t.Fatalf("replaced view returned wrong data: %v", rows)
+	}
+
+	// Tables behave the same.
+	if code, res := syncQuery(t, base, "CREATE TABLE d3.t9 (c0 INT64)"); code != http.StatusOK {
+		t.Fatalf("CREATE TABLE: %d %v", code, res)
+	}
+	if code, res := syncQuery(t, base, "CREATE OR REPLACE TABLE d3.t9 (c FLOAT64)"); code != http.StatusOK {
+		t.Fatalf("CREATE OR REPLACE TABLE: %d %v", code, res)
+	}
+	if code, res := syncQuery(t, base, "SELECT c FROM d3.t9"); code != http.StatusOK {
+		t.Fatalf("SELECT new column from replaced table: %d %v", code, res)
+	}
+}
+
+// Issue #10: CSV load jobs must honor skipLeadingRows. Unset/0 keep every
+// row (no header is assumed), N drops exactly N leading rows. dbt seeds
+// (header CSV + skipLeadingRows 1) keep working.
+func TestCSVLoadSkipLeadingRows(t *testing.T) {
+	testServer := newDBTTestServer(t)
+	base := testServer.URL
+	mustCreateDataset(t, base, "d10")
+
+	loadCSV := func(tableID, skipFragment, data string) {
+		t.Helper()
+		jobJSON := `{"configuration":{"load":{"sourceFormat":"CSV",` + skipFragment +
+			`"schema":{"fields":[{"name":"n","type":"STRING"},{"name":"a","type":"INT64"}]},` +
+			`"destinationTable":{"projectId":"test","datasetId":"d10","tableId":"` + tableID + `"}}}}`
+		contentType, body := multipartUpload(jobJSON, data)
+		code, res := httpJSON(t, http.MethodPost,
+			base+"/upload/bigquery/v2/projects/test/jobs?uploadType=multipart",
+			body, map[string]string{"Content-Type": contentType})
+		if code != http.StatusOK {
+			t.Fatalf("load %s: %d %v", tableID, code, res)
+		}
+	}
+	tableRows := func(tableID string) [][]string {
+		t.Helper()
+		code, res := syncQuery(t, base, "SELECT n, a FROM d10."+tableID+" ORDER BY n")
+		if code != http.StatusOK {
+			t.Fatalf("read %s: %d %v", tableID, code, res)
+		}
+		return queryRows(t, res)
+	}
+
+	const headerless = "x,1\ny,2"
+	loadCSV("t_unset", "", headerless)
+	loadCSV("t_zero", `"skipLeadingRows":0,`, headerless)
+	loadCSV("t_one", `"skipLeadingRows":1,`, headerless)
+	loadCSV("t_seed", `"skipLeadingRows":1,`, "n,a\n"+headerless)
+
+	if rows := tableRows("t_unset"); fmt.Sprint(rows) != "[[x 1] [y 2]]" {
+		t.Fatalf("skipLeadingRows unset must keep both rows, got %v", rows)
+	}
+	if rows := tableRows("t_zero"); fmt.Sprint(rows) != "[[x 1] [y 2]]" {
+		t.Fatalf("skipLeadingRows 0 must keep both rows, got %v", rows)
+	}
+	if rows := tableRows("t_one"); fmt.Sprint(rows) != "[[y 2]]" {
+		t.Fatalf("skipLeadingRows 1 must drop exactly the first row, got %v", rows)
+	}
+	if rows := tableRows("t_seed"); fmt.Sprint(rows) != "[[x 1] [y 2]]" {
+		t.Fatalf("dbt-seed shape (header + skipLeadingRows 1) broke, got %v", rows)
+	}
+}

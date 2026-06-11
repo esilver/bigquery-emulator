@@ -465,7 +465,10 @@ func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentReque
 
 	// Read CSV content up front so an autodetect load can infer the schema
 	// before the destination table is created.
-	var csvRecords [][]string
+	var (
+		csvRecords            [][]string
+		csvAutodetectedHeader bool
+	)
 	if load.SourceFormat == "CSV" {
 		records, err := csv.NewReader(r.reader).ReadAll()
 		if err != nil {
@@ -478,6 +481,10 @@ func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentReque
 				return err
 			}
 			load.Schema = schema
+			// The schema's column names came from the first row, so that
+			// row is a header and must not be loaded as data (real
+			// BigQuery's autodetect detects the header row the same way).
+			csvAutodetectedHeader = true
 		}
 	}
 	if table == nil {
@@ -513,26 +520,41 @@ func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentReque
 	switch sourceFormat {
 	case "CSV":
 		records := csvRecords
-		if len(records) == 0 {
-			return fmt.Errorf("failed to find csv header")
+		// skipLeadingRows defaults to 0: no header is assumed and every
+		// row is data. The previous code unconditionally treated the
+		// first row as a header, silently dropping the first record of
+		// every headerless CSV (issue #10). An autodetected schema took
+		// its column names from the first row, so that row is known to
+		// be a header even when skipLeadingRows is unset.
+		skipRows := load.SkipLeadingRows
+		if skipRows < 0 {
+			return errInvalid(fmt.Sprintf("skipLeadingRows must be >= 0, got %d", skipRows))
 		}
-		if len(records) == 1 {
-			return nil
+		if csvAutodetectedHeader && skipRows == 0 {
+			skipRows = 1
 		}
-		header := records[0]
-		var ignoreHeader bool
-		for _, col := range header {
-			if _, exists := columnToType[col]; !exists {
-				ignoreHeader = true
-				break
+		// When rows are skipped, the first one is BigQuery's header row;
+		// if its cells all name table columns it keys the column order of
+		// the data rows (dbt seeds upload header CSVs this way). A
+		// headerless load maps CSV columns positionally onto the schema.
+		useHeaderOrder := false
+		if skipRows > 0 && len(records) > 0 {
+			useHeaderOrder = true
+			for _, col := range records[0] {
+				if _, exists := columnToType[col]; !exists {
+					useHeaderOrder = false
+					break
+				}
 			}
-			columns = append(columns, &types.Column{
-				Name: col,
-				Type: columnToType[col],
-			})
 		}
-		if ignoreHeader {
-			columns = []*types.Column{}
+		if useHeaderOrder {
+			for _, col := range records[0] {
+				columns = append(columns, &types.Column{
+					Name: col,
+					Type: columnToType[col],
+				})
+			}
+		} else {
 			for _, field := range tableContent.Schema.Fields {
 				columns = append(columns, &types.Column{
 					Name: field.Name,
@@ -540,7 +562,12 @@ func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentReque
 				})
 			}
 		}
-		for _, record := range records[1:] {
+		if skipRows >= int64(len(records)) {
+			// Every row was skipped (including the empty-body case):
+			// the load succeeds and the table is simply left as is.
+			return nil
+		}
+		for _, record := range records[skipRows:] {
 			rowData := map[string]interface{}{}
 			if len(record) != len(columns) {
 				return fmt.Errorf("invalid column number: found broken row data: %v", record)
@@ -1788,14 +1815,19 @@ func (h *jobsInsertHandler) handleDryRun(ctx context.Context, r *jobsInsertReque
 	}
 	defer tx.RollbackIfNotCommitted()
 	startTime := time.Now()
-	response, jobErr := r.server.contentRepo.Query(
-		ctx,
-		tx,
-		r.project.ID,
-		"",
-		job.Configuration.Query.Query,
-		job.Configuration.Query.QueryParameters,
-	)
+	// DROP SCHEMA is not supported by the dialect layer yet; it is handled
+	// at the emulator layer instead (issue #8) — validation only here.
+	response, jobErr := handleDropSchemaQuery(ctx, r.server, r.project.ID, job.Configuration.Query.Query, true)
+	if jobErr == nil && response == nil {
+		response, jobErr = r.server.contentRepo.Query(
+			ctx,
+			tx,
+			r.project.ID,
+			"",
+			job.Configuration.Query.Query,
+			job.Configuration.Query.QueryParameters,
+		)
+	}
 	endTime := time.Now()
 	var totalBytes int64
 	if response != nil {
@@ -1841,6 +1873,178 @@ func syncCatalog(ctx context.Context, server *Server, cat *googlesqlite.ChangedC
 		}
 	}
 	return nil
+}
+
+// handleDropSchemaQuery executes a DROP SCHEMA statement at the emulator
+// layer. The dialect layer does not support DROP SCHEMA yet (it fails with
+// "currently unsupported DROP SCHEMA statement" before reaching the engine),
+// so the drop is performed directly against the metadata repository and the
+// content repository — the same work the REST datasets.delete handler does —
+// and an empty engine-shaped result is synthesized (issue #8).
+//
+// It returns (nil, nil) when the query is not a DROP SCHEMA statement the
+// helper can resolve, in which case the caller proceeds to the engine.
+// dryRun validates the statement without mutating anything.
+func handleDropSchemaQuery(ctx context.Context, server *Server, defaultProjectID, query string, dryRun bool) (*internaltypes.QueryResponse, error) {
+	tokens := scanLeadingTokens(query, 8)
+	if len(tokens) < 2 || tokens[0] != "DROP" || tokens[1] != "SCHEMA" {
+		return nil, nil
+	}
+	parts := schemaDDLTargetPath(query)
+	if len(parts) == 0 || len(parts) > 2 {
+		return nil, nil
+	}
+	ifExists := len(tokens) >= 4 && tokens[2] == "IF" && tokens[3] == "EXISTS"
+	cascade := tokens[len(tokens)-1] == "CASCADE"
+	projectID := defaultProjectID
+	datasetID := parts[len(parts)-1]
+	if len(parts) == 2 {
+		projectID = parts[0]
+	}
+	emptyResponse := func() *internaltypes.QueryResponse {
+		return &internaltypes.QueryResponse{
+			Schema:      &bigqueryv2.TableSchema{},
+			Rows:        []*internaltypes.TableRow{},
+			JobComplete: true,
+			ChangedCatalog: &googlesqlite.ChangedCatalog{
+				Table:    &googlesqlite.ChangedTable{},
+				Function: &googlesqlite.ChangedFunction{},
+			},
+		}
+	}
+	project, err := server.metaRepo.FindProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if project == nil {
+		if ifExists {
+			return emptyResponse(), nil
+		}
+		return nil, errNotFound(fmt.Sprintf("Not found: Project %s", projectID))
+	}
+	dataset := project.Dataset(datasetID)
+	if dataset == nil {
+		if ifExists {
+			return emptyResponse(), nil
+		}
+		return nil, errNotFound(fmt.Sprintf("Not found: Dataset %s:%s", projectID, datasetID))
+	}
+	tables := dataset.Tables()
+	if len(tables) > 0 && !cascade {
+		return nil, errInvalid(fmt.Sprintf(
+			"Schema %s:%s is not empty, to force deletion use the CASCADE option",
+			projectID, datasetID,
+		))
+	}
+	if dryRun {
+		return emptyResponse(), nil
+	}
+	conn, err := server.connMgr.Connection(ctx, projectID, datasetID)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.RollbackIfNotCommitted()
+	deletions := make([]contentdata.TableDeletion, 0, len(tables))
+	for _, table := range tables {
+		if err := table.Delete(ctx, tx.Tx()); err != nil {
+			return nil, err
+		}
+		deletions = append(deletions, contentdata.TableDeletion{
+			ID:     table.ID,
+			IsView: table.IsView(),
+		})
+	}
+	if err := server.contentRepo.DeleteTables(ctx, tx, projectID, datasetID, deletions); err != nil {
+		return nil, fmt.Errorf("failed to delete tables: %w", err)
+	}
+	if err := project.DeleteDataset(ctx, tx.Tx(), datasetID); err != nil {
+		return nil, fmt.Errorf("failed to delete dataset: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return emptyResponse(), nil
+}
+
+// syncSchemaDDL mirrors a successful CREATE SCHEMA / DROP SCHEMA executed
+// through the query paths into the metadata repository. The dialect layer
+// performs the DDL on the engine, but its ChangedCatalog only carries table
+// and function changes, so without this the dataset never reaches the
+// metadata repository and every later statement that resolves it fails with
+// "dataset ... is not found" (issue #8).
+func syncSchemaDDL(ctx context.Context, server *Server, defaultProjectID, stmtType, query string) error {
+	if stmtType != "CREATE_SCHEMA" && stmtType != "DROP_SCHEMA" {
+		return nil
+	}
+	parts := schemaDDLTargetPath(query)
+	if len(parts) == 0 || len(parts) > 2 {
+		return nil
+	}
+	projectID := defaultProjectID
+	datasetID := parts[len(parts)-1]
+	if len(parts) == 2 {
+		projectID = parts[0]
+	}
+	project, err := server.metaRepo.FindProject(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if project == nil {
+		return nil
+	}
+	conn, err := server.connMgr.Connection(ctx, projectID, datasetID)
+	if err != nil {
+		return err
+	}
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.RollbackIfNotCommitted()
+	switch stmtType {
+	case "CREATE_SCHEMA":
+		if project.Dataset(datasetID) != nil {
+			// Already registered: an IF NOT EXISTS create over an
+			// existing dataset is a no-op.
+			return nil
+		}
+		if err := project.AddDataset(ctx, tx.Tx(), metadata.NewDataset(
+			server.metaRepo,
+			projectID,
+			datasetID,
+			&bigqueryv2.Dataset{
+				Id: fmt.Sprintf("%s:%s", projectID, datasetID),
+				DatasetReference: &bigqueryv2.DatasetReference{
+					ProjectId: projectID,
+					DatasetId: datasetID,
+				},
+			},
+			nil, nil, nil,
+		)); err != nil {
+			return err
+		}
+	case "DROP_SCHEMA":
+		dataset := project.Dataset(datasetID)
+		if dataset == nil {
+			// Not registered: an IF EXISTS drop of a missing dataset.
+			return nil
+		}
+		// The engine has already dropped the schema (and, for CASCADE,
+		// its tables); remove the metadata entries to match.
+		for _, table := range dataset.Tables() {
+			if err := table.Delete(ctx, tx.Tx()); err != nil {
+				return err
+			}
+		}
+		if err := project.DeleteDataset(ctx, tx.Tx(), datasetID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func upsertTableMetadata(ctx context.Context, server *Server, spec *googlesqlite.TableSpec) error {
@@ -2046,14 +2250,19 @@ func (h *jobsQueryHandler) Handle(ctx context.Context, r *jobsQueryRequest) (*in
 	}
 	defer tx.RollbackIfNotCommitted()
 	startTime := time.Now()
-	response, queryErr := r.server.contentRepo.Query(
-		ctx,
-		tx,
-		r.project.ID,
-		datasetID,
-		r.queryRequest.Query,
-		r.queryRequest.QueryParameters,
-	)
+	// DROP SCHEMA is not supported by the dialect layer yet; execute it at
+	// the emulator layer instead (issue #8).
+	response, queryErr := handleDropSchemaQuery(ctx, r.server, r.project.ID, r.queryRequest.Query, r.queryRequest.DryRun)
+	if queryErr == nil && response == nil {
+		response, queryErr = r.server.contentRepo.Query(
+			ctx,
+			tx,
+			r.project.ID,
+			datasetID,
+			r.queryRequest.Query,
+			r.queryRequest.QueryParameters,
+		)
+	}
 	if queryErr != nil {
 		return nil, queryErr
 	}
@@ -2137,6 +2346,9 @@ func (h *jobsQueryHandler) Handle(ctx context.Context, r *jobsQueryRequest) (*in
 			if err := syncCatalog(ctx, r.server, response.ChangedCatalog); err != nil {
 				return nil, err
 			}
+		}
+		if err := syncSchemaDDL(ctx, r.server, r.project.ID, job.Statistics.Query.StatementType, r.queryRequest.Query); err != nil {
+			return nil, err
 		}
 	}
 	response.Rows = internaltypes.Format(response.Schema, response.Rows, r.useInt64Timestamp)

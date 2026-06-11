@@ -1,6 +1,9 @@
 package server
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // statementTypeForQuery is exercised end-to-end in dbt_issues_test.go; this
 // covers the text-only fallback paths (no ChangedCatalog), in particular the
@@ -37,6 +40,33 @@ func TestStatementTypeForQueryTextFallback(t *testing.T) {
 	for _, tc := range cases {
 		if got := statementTypeForQuery(tc.query, nil); got != tc.want {
 			t.Errorf("statementTypeForQuery(%q) = %q, want %q", tc.query, got, tc.want)
+		}
+	}
+}
+
+func TestSchemaDDLTargetPath(t *testing.T) {
+	cases := []struct {
+		query string
+		want  string
+	}{
+		{"CREATE SCHEMA d2", "d2"},
+		{"create schema if not exists D2", "D2"},
+		{"CREATE SCHEMA proj.d2", "proj.d2"},
+		{"CREATE SCHEMA `proj.d2`", "proj.d2"},
+		{"CREATE SCHEMA `proj`.`d2`", "proj.d2"},
+		{"CREATE SCHEMA proj.`d2`", "proj.d2"},
+		{"-- comment\nCREATE SCHEMA /* x */ d2 OPTIONS(description='y')", "d2"},
+		{"DROP SCHEMA d2", "d2"},
+		{"DROP SCHEMA IF EXISTS d2 CASCADE", "d2"},
+		{"ALTER SCHEMA d2 SET OPTIONS(description='y')", "d2"},
+		{"CREATE TABLE d.t (x INT64)", ""},
+		{"SELECT 1", ""},
+		{"DROP TABLE d.t", ""},
+	}
+	for _, tc := range cases {
+		got := strings.Join(schemaDDLTargetPath(tc.query), ".")
+		if got != tc.want {
+			t.Errorf("schemaDDLTargetPath(%q) = %q, want %q", tc.query, got, tc.want)
 		}
 	}
 }

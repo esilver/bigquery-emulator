@@ -119,8 +119,8 @@ github.com/envoyproxy/protoc-gen-validate v1.3.3 h1:MVQghNeW+LZcmXe7SY1V36Z+WFMD
 github.com/envoyproxy/protoc-gen-validate v1.3.3/go.mod h1:TsndJ/ngyIdQRhMcVVGDDHINPLWB7C82oDArY51KfB0=
 github.com/esilver/duckdb-go-pure v0.3.2 h1:5YwF9ZYK8Av6CEDTZP+R3YF7eTwvA0Ww1Eio0NYcomY=
 github.com/esilver/duckdb-go-pure v0.3.2/go.mod h1:K0lu75wP4hv1zaaEEqaq42/cE96wNg/azf4kGnIwg2g=
-github.com/esilver/googlesqlite v0.2.15-pure-go h1:lHXjxCoag3vdUy8TEd6x07CYyh3kDHycIDiYUXiruf8=
-github.com/esilver/googlesqlite v0.2.15-pure-go/go.mod h1:bukXt0UO+KSJoLUnzRYm7brVIS/mBCCfvafl92RbLts=
+github.com/esilver/googlesqlite v0.2.16-pure-go h1:plM1vXQvgu+9txeYCcZN2YajoKQZTgI7v793kq0K/Pw=
+github.com/esilver/googlesqlite v0.2.16-pure-go/go.mod h1:bukXt0UO+KSJoLUnzRYm7brVIS/mBCCfvafl92RbLts=
 github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2Wg=
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/fsouza/fake-gcs-server v1.54.0 h1:DGO4EkFVbtP/A5Ha+CAHHx+Xa6O6LeskMB4hQ1wBE48=
