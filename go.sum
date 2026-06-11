@@ -119,8 +119,8 @@ github.com/envoyproxy/protoc-gen-validate v1.3.3 h1:MVQghNeW+LZcmXe7SY1V36Z+WFMD
 github.com/envoyproxy/protoc-gen-validate v1.3.3/go.mod h1:TsndJ/ngyIdQRhMcVVGDDHINPLWB7C82oDArY51KfB0=
 github.com/esilver/duckdb-go-pure v0.3.2 h1:5YwF9ZYK8Av6CEDTZP+R3YF7eTwvA0Ww1Eio0NYcomY=
 github.com/esilver/duckdb-go-pure v0.3.2/go.mod h1:K0lu75wP4hv1zaaEEqaq42/cE96wNg/azf4kGnIwg2g=
-github.com/esilver/googlesqlite v0.2.18-pure-go h1:QfTe3SO7Ya4RdQwes+LJGjdtajPtLZgfcIozwQYHg8o=
-github.com/esilver/googlesqlite v0.2.18-pure-go/go.mod h1:N80sJwH5EHT0yO/8omKqe1GftnN76fIEqxgBmm/pn+0=
+github.com/esilver/googlesqlite v0.2.17-pure-go h1:LuuteEGbIhFB8w9EBDyue+4GrJ4AF20M30RIWNKUtRE=
+github.com/esilver/googlesqlite v0.2.17-pure-go/go.mod h1:bukXt0UO+KSJoLUnzRYm7brVIS/mBCCfvafl92RbLts=
 github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2Wg=
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/fsouza/fake-gcs-server v1.54.0 h1:DGO4EkFVbtP/A5Ha+CAHHx+Xa6O6LeskMB4hQ1wBE48=
@@ -148,14 +148,12 @@ github.com/go-playground/validator/v10 v10.30.2 h1:JiFIMtSSHb2/XBUbWM4i/MpeQm9ZK
 github.com/go-playground/validator/v10 v10.30.2/go.mod h1:mAf2pIOVXjTEBrwUMGKkCWKKPs9NheYGabeB04txQSc=
 github.com/go-sourcemap/sourcemap v2.1.4+incompatible h1:a+iTbH5auLKxaNwQFg0B+TCYl6lbukKPc7b5x0n1s6Q=
 github.com/go-sourcemap/sourcemap v2.1.4+incompatible/go.mod h1:F8jJfvm2KbVjc5NqelyYJmf/v5J0dwNLS2mL4sNA1Jg=
-github.com/goccy/go-googlesql v0.2.3-0.20260610151139-eb229fca73e7 h1:Jw4964mdEPvixdmFoUcfTUl6b/CssM3kRbpZYA7Ox3Q=
-github.com/goccy/go-googlesql v0.2.3-0.20260610151139-eb229fca73e7/go.mod h1:0CUrO9fG9A5lAxOQDjCUr7ibzoRLiv2iaAwbGvESAhM=
+github.com/goccy/go-googlesql v0.2.2 h1:DWdtoc9cvGYA4xPPFKY21wa/F4fTEok6XYqYyHTX1SU=
+github.com/goccy/go-googlesql v0.2.2/go.mod h1:vbFu4BUsSFGUlf0E0YLceljwt/uHxNO6gmOjRwLsCZk=
 github.com/goccy/go-json v0.10.6 h1:p8HrPJzOakx/mn/bQtjgNjdTcN+/S6FcG2CTtQOrHVU=
 github.com/goccy/go-json v0.10.6/go.mod h1:oq7eo15ShAhp70Anwd5lgX2pLfOS3QCiwU/PULtXL6M=
 github.com/goccy/go-yaml v1.19.2 h1:PmFC1S6h8ljIz6gMRBopkjP1TVT7xuwrButHID66PoM=
 github.com/goccy/go-yaml v1.19.2/go.mod h1:XBurs7gK8ATbW4ZPGKgcbrY1Br56PdM69F7LkFRi1kA=
-github.com/goccy/googlesqlwasm2go v0.1.0 h1:JQBPU09y9PvwU/GS2gOpP7pjaE9ttwI/9YGtj2ZlPZc=
-github.com/goccy/googlesqlwasm2go v0.1.0/go.mod h1:tseRDWO0lzEmGYZG9lGqymtexVhg6QNrZLJih4fOQs8=
 github.com/golang/geo v0.0.0-20260512202753-e3c51de6d1b6 h1:maAhA7cpighmEi96eTgDdmlhwnHYEgwhR6t+T7k3Png=
 github.com/golang/geo v0.0.0-20260512202753-e3c51de6d1b6/go.mod h1:Mymr9kRGDc64JPr03TSZmuIBODZ3KyswLzm1xL0HFA8=
 github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b/go.mod h1:SBH7ygxi8pfUlaOkMMuAQtPIUF8ecWP5IEl/CR7VP2Q=
@@ -312,6 +310,8 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/testcontainers/testcontainers-go v0.42.0 h1:He3IhTzTZOygSXLJPMX7n44XtK+qhjat1nI9cneBbUY=
 github.com/testcontainers/testcontainers-go v0.42.0/go.mod h1:vZjdY1YmUA1qEForxOIOazfsrdyORJAbhi0bp8plN30=
+github.com/tetratelabs/wazero v1.11.0 h1:+gKemEuKCTevU4d7ZTzlsvgd1uaToIDtlQlmNbwqYhA=
+github.com/tetratelabs/wazero v1.11.0/go.mod h1:eV28rsN8Q+xwjogd7f4/Pp4xFxO7uOGbLcD/LzB1wiU=
 github.com/tinylib/msgp v1.6.1 h1:ESRv8eL3u+DNHUoSAAQRE50Hm162zqAnBoGv9PzScPY=
 github.com/tinylib/msgp v1.6.1/go.mod h1:RSp0LW9oSxFut3KzESt5Voq4GVWyS+PSulT77roAqEA=
 github.com/tklauser/go-sysconf v0.3.16 h1:frioLaCQSsF5Cy1jgRBrzr6t502KIIwQ0MArYICU0nA=
