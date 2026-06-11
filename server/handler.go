@@ -95,19 +95,26 @@ func (h *discoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			decodeJSONErr = err
 			return
 		}
-		addr := h.server.httpServer.Addr
-		if !strings.HasPrefix(addr, "http") {
-			addr = "http://" + addr
-		}
-		discoveryAPIResponse["mtlsRootUrl"] = addr
-		discoveryAPIResponse["rootUrl"] = addr
-		discoveryAPIResponse["baseUrl"] = addr
 	})
 	if decodeJSONErr != nil {
 		errorResponse(ctx, w, errInternalError(decodeJSONErr.Error()))
 		return
 	}
-	encodeResponse(ctx, w, discoveryAPIResponse)
+	// Generated clients dereference the discovery document's base URLs for
+	// every subsequent call, so like the resumable session URL (#16) they
+	// must reflect the address the client used, not the bind address — and
+	// they cannot live inside the Once, which would freeze the first
+	// request's view. Patch a per-request shallow copy of the shared
+	// template.
+	addr := resumableSessionBaseURL(r, h.server.httpServer.Addr)
+	response := make(map[string]interface{}, len(discoveryAPIResponse))
+	for k, v := range discoveryAPIResponse {
+		response[k] = v
+	}
+	response["mtlsRootUrl"] = addr
+	response["rootUrl"] = addr
+	response["baseUrl"] = addr
+	encodeResponse(ctx, w, response)
 }
 
 type uploadHandler struct{}
