@@ -65,9 +65,10 @@ func TestStatementWatchdogFailsRunawayJob(t *testing.T) {
 	// what the wedge chain needed. Re-enable when duckdb_interrupt lands.
 	t.Skip("single-statement cancellation requires the duckdb_interrupt export (engine lane)")
 
-	// A multi-second single statement (a 100M-row cross-join aggregate over
-	// computed strings): far over the 150ms budget, far under the test
-	// timeout.
+	// A multi-second single statement (a 64M-row cross-join aggregate with a
+	// per-row filter): far over the 150ms budget, far under the test timeout,
+	// and constant-memory — a COUNT(DISTINCT CONCAT(..)) shape here OOM'd the
+	// engine's 1GiB limit after ~5 minutes instead of running away.
 	slow := "SELECT COUNT(*) FROM UNNEST(GENERATE_ARRAY(1, 8000)) a, UNNEST(GENERATE_ARRAY(1, 8000)) b WHERE MOD(a+b, 7) > 0"
 	it, err := client.Query(slow).Read(ctx)
 	if err == nil {
