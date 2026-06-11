@@ -95,19 +95,65 @@ func (h *discoveryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			decodeJSONErr = err
 			return
 		}
-		addr := h.server.httpServer.Addr
-		if !strings.HasPrefix(addr, "http") {
-			addr = "http://" + addr
-		}
-		discoveryAPIResponse["mtlsRootUrl"] = addr
-		discoveryAPIResponse["rootUrl"] = addr
-		discoveryAPIResponse["baseUrl"] = addr
 	})
 	if decodeJSONErr != nil {
 		errorResponse(ctx, w, errInternalError(decodeJSONErr.Error()))
 		return
 	}
-	encodeResponse(ctx, w, discoveryAPIResponse)
+	// The discovery document advertises the base URLs that generated clients
+	// dereference for every subsequent call, so they must be derived from the
+	// incoming request rather than the bind address (issue #16). Patch a
+	// shallow copy per request; the parsed template above is shared.
+	addr := requestBaseURL(h.server, r)
+	response := make(map[string]interface{}, len(discoveryAPIResponse))
+	for k, v := range discoveryAPIResponse {
+		response[k] = v
+	}
+	response["mtlsRootUrl"] = addr
+	response["rootUrl"] = addr
+	response["baseUrl"] = addr
+	encodeResponse(ctx, w, response)
+}
+
+// requestBaseURL derives the scheme://authority base that response URLs
+// (resumable upload session Location, discovery root URLs) should advertise.
+// It must reflect the address the CLIENT used, not the server's bind address:
+// behind any port mapping (docker -p, compose, k8s, reverse proxy) the bind
+// address is unreachable from the client (issue #16). Standard proxy headers
+// win, then the request's Host header; the bind address is only a fallback
+// for the degenerate case of a missing Host.
+func requestBaseURL(server *Server, r *http.Request) string {
+	host := r.Header.Get("X-Forwarded-Host")
+	if host != "" {
+		// Multiple proxies append comma-separated values; the first is the
+		// client-facing one.
+		if i := strings.IndexByte(host, ','); i >= 0 {
+			host = host[:i]
+		}
+		host = strings.TrimSpace(host)
+	}
+	if host == "" {
+		host = r.Host
+	}
+	if host == "" {
+		addr := server.httpServer.Addr
+		if !strings.HasPrefix(addr, "http") {
+			addr = "http://" + addr
+		}
+		return strings.TrimRight(addr, "/")
+	}
+	scheme := r.Header.Get("X-Forwarded-Proto")
+	if i := strings.IndexByte(scheme, ','); i >= 0 {
+		scheme = strings.TrimSpace(scheme[:i])
+	}
+	if scheme == "" {
+		if r.TLS != nil {
+			scheme = "https"
+		} else {
+			scheme = "http"
+		}
+	}
+	return scheme + "://" + host
 }
 
 type uploadHandler struct{}
@@ -304,11 +350,10 @@ func (h *uploadHandler) serveResumable(w http.ResponseWriter, r *http.Request) {
 		errorResponse(ctx, w, errInternalError(err.Error()))
 		return
 	}
-	addr := server.httpServer.Addr
-	if !strings.HasPrefix(addr, "http") {
-		addr = "http://" + addr
-	}
-	addr = strings.TrimRight(addr, "/")
+	// The session URL must be reachable from the client's side of any port
+	// mapping, so mint it from the incoming request, not the bind address
+	// (issue #16).
+	addr := requestBaseURL(server, r)
 	w.Header().Add(
 		"Location",
 		fmt.Sprintf(
