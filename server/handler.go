@@ -304,21 +304,44 @@ func (h *uploadHandler) serveResumable(w http.ResponseWriter, r *http.Request) {
 		errorResponse(ctx, w, errInternalError(err.Error()))
 		return
 	}
-	addr := server.httpServer.Addr
-	if !strings.HasPrefix(addr, "http") {
-		addr = "http://" + addr
-	}
-	addr = strings.TrimRight(addr, "/")
 	w.Header().Add(
 		"Location",
 		fmt.Sprintf(
 			"%s/upload/bigquery/v2/projects/%s/jobs?uploadType=resumable&upload_id=%s",
-			addr,
+			resumableSessionBaseURL(r, server.httpServer.Addr),
 			project.ID,
 			job.JobReference.JobId,
 		),
 	)
 	encodeResponse(ctx, w, res.Content())
+}
+
+// resumableSessionBaseURL derives the scheme and authority of the
+// resumable-upload session URL from the incoming request rather than the
+// listener. The bind address names the listener inside the container or
+// VM, which a client behind a port mapping or reverse proxy cannot reach
+// (#16). Forwarded headers win so TLS-terminating proxies keep working,
+// then the Host the client actually dialed, with the bind address as the
+// last resort.
+func resumableSessionBaseURL(r *http.Request, bindAddr string) string {
+	scheme := strings.TrimSpace(strings.SplitN(r.Header.Get("X-Forwarded-Proto"), ",", 2)[0])
+	if scheme == "" {
+		if r.TLS != nil {
+			scheme = "https"
+		} else {
+			scheme = "http"
+		}
+	}
+	// Chained proxies append comma-separated hosts, the first entry is
+	// the client-facing one.
+	host := strings.TrimSpace(strings.SplitN(r.Header.Get("X-Forwarded-Host"), ",", 2)[0])
+	if host == "" {
+		host = r.Host
+	}
+	if host == "" {
+		host = strings.TrimPrefix(strings.TrimPrefix(bindAddr, "https://"), "http://")
+	}
+	return scheme + "://" + strings.TrimRight(host, "/")
 }
 
 type uploadRequest struct {
