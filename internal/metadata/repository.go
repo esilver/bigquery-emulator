@@ -207,7 +207,17 @@ func (r *Repository) findProjects(ctx context.Context, tx *sql.Tx, ids []string)
 		if err != nil {
 			return nil, err
 		}
-		jobs, err := r.findJobs(ctx, tx, projectID, r.convertToStrings(jobIDs))
+		// Hydrate the job list from the jobs table itself, WITHOUT the
+		// persisted result payloads (issue #14): jobIDs-array-driven
+		// hydration loaded every job row INCLUDING its full query-result
+		// JSON, so each hydration cost O(total jobs x result size). A dbt
+		// build accumulates thousands of job rows (retries included) and
+		// the write paths hydrate under seqMu, so the per-insert cost grew
+		// linearly and the lock queue collapsed into a server-wide wedge.
+		// Results load lazily through FindJob when a reader needs them
+		// (Job.Wait / Job.WaitForResult already fall back to it).
+		_ = jobIDs
+		jobs, err := r.findProjectJobs(ctx, tx, projectID)
 		if err != nil {
 			return nil, err
 		}
@@ -249,7 +259,17 @@ func (r *Repository) FindAllProjects(ctx context.Context) ([]*Project, error) {
 		if err != nil {
 			return nil, err
 		}
-		jobs, err := r.findJobs(ctx, tx, projectID, r.convertToStrings(jobIDs))
+		// Hydrate the job list from the jobs table itself, WITHOUT the
+		// persisted result payloads (issue #14): jobIDs-array-driven
+		// hydration loaded every job row INCLUDING its full query-result
+		// JSON, so each hydration cost O(total jobs x result size). A dbt
+		// build accumulates thousands of job rows (retries included) and
+		// the write paths hydrate under seqMu, so the per-insert cost grew
+		// linearly and the lock queue collapsed into a server-wide wedge.
+		// Results load lazily through FindJob when a reader needs them
+		// (Job.Wait / Job.WaitForResult already fall back to it).
+		_ = jobIDs
+		jobs, err := r.findProjectJobs(ctx, tx, projectID)
 		if err != nil {
 			return nil, err
 		}
@@ -369,6 +389,83 @@ func (r *Repository) findJobs(ctx context.Context, tx *sql.Tx, projectID string,
 		)
 	}
 	return jobs, nil
+}
+
+// findProjectJobs hydrates every job row of a project WITHOUT the persisted
+// result column. The result payload is the dominant cost of a job row (it
+// carries the full query response); list-shaped readers (jobs.list, project
+// hydration, duplicate checks) never need it, and point readers reload it
+// through FindJob (Job.Wait / Job.WaitForResult fall back automatically when
+// the in-memory response is nil).
+func (r *Repository) findProjectJobs(ctx context.Context, tx *sql.Tx, projectID string) ([]*Job, error) {
+	rows, err := tx.QueryContext(
+		ctx,
+		"SELECT id, metadata, error FROM jobs WHERE projectID = @projectID",
+		sql.Named("projectID", projectID),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	jobs := []*Job{}
+	for rows.Next() {
+		var (
+			jobID    string
+			metadata string
+			jobErr   string
+		)
+		if err := rows.Scan(&jobID, &metadata, &jobErr); err != nil {
+			return nil, err
+		}
+		var content bigqueryv2.Job
+		if len(metadata) > 0 {
+			if err := json.Unmarshal([]byte(metadata), &content); err != nil {
+				return nil, fmt.Errorf("failed to decode metadata content %s: %w", metadata, err)
+			}
+		}
+		var resErr error
+		if jobErr != "" {
+			resErr = errors.New(jobErr)
+		}
+		jobs = append(jobs, NewJob(r, projectID, jobID, &content, nil, resErr))
+	}
+	return jobs, nil
+}
+
+// ProjectExistsWithConn reports whether the projects row exists, without
+// hydrating anything (issue #14: the job-insert path must not pay a full
+// project hydration under the global write lock).
+func (r *Repository) ProjectExistsWithConn(ctx context.Context, tx *sql.Tx, projectID string) (bool, error) {
+	var one int
+	err := tx.QueryRowContext(ctx, "SELECT 1 FROM projects WHERE id = @id", sql.Named("id", projectID)).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// InsertJob persists a new job row after an O(1) duplicate probe. It is the
+// flat-cost replacement for Project.AddJob on the hot jobs.insert path
+// (issue #14): no project hydration, no jobIDs-array rewrite — the job list
+// is derived from the jobs table itself (see findProjectJobs).
+func (r *Repository) InsertJob(ctx context.Context, tx *sql.Tx, job *Job) error {
+	var one int
+	err := tx.QueryRowContext(
+		ctx,
+		"SELECT 1 FROM jobs WHERE projectID = @projectID AND id = @id",
+		sql.Named("projectID", job.ProjectID),
+		sql.Named("id", job.ID),
+	).Scan(&one)
+	if err == nil {
+		return fmt.Errorf("job %s: %w", job.ID, ErrDuplicatedJob)
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+	return r.AddJob(ctx, tx, job)
 }
 
 func (r *Repository) AddJob(ctx context.Context, tx *sql.Tx, job *Job) error {

@@ -298,12 +298,23 @@ func withProjectMiddleware() func(http.Handler) http.Handler {
 				// invalidate the cache), and listing is the one read that is
 				// ABOUT that list. Mutating routes hydrate fresh state under
 				// seqMu, which their handlers' read-modify-write cycles (e.g.
-				// AddJob rewriting the project's job list) depend on.
+				// AddDataset rewriting the project's dataset list) depend on.
 				var (
 					project *metadata.Project
 					err     error
 				)
-				if r.Method == http.MethodGet && !jobsListRoute(r) {
+				// The async query-job routes hydrate through the cache too
+				// (issue #14): jobs.insert runs at full client concurrency
+				// (dbt threads x retries), and a fresh FindProject per
+				// insert is O(total job rows) of engine statements — the
+				// single-threaded engine saturates quadratically as a build
+				// accumulates jobs, which is what wedged the 620-node
+				// bench. The insert path no longer mutates through the
+				// hydrated project: registerAndPersistJob re-probes
+				// existence and duplicates inside its own transaction under
+				// seqMu, and the load/extract branch re-hydrates fresh
+				// state after it takes seqMu itself.
+				if (r.Method == http.MethodGet && !jobsListRoute(r)) || asyncJobRoute(r) {
 					project, err = server.readProject(ctx, projectID)
 				} else {
 					project, err = server.metaRepo.FindProject(ctx, projectID)

@@ -338,7 +338,7 @@ func (h *uploadHandler) Handle(ctx context.Context, r *uploadRequest) (*metadata
 	}
 	defer tx.RollbackIfNotCommitted()
 	job := metadata.NewJob(r.server.metaRepo, r.project.ID, r.job.JobReference.JobId, r.job.ToJob(), nil, nil)
-	if err := r.project.AddJob(ctx, tx.Tx(), job); err != nil {
+	if err := r.server.metaRepo.InsertJob(ctx, tx.Tx(), job); err != nil {
 		return nil, fmt.Errorf("failed to add job: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -1504,7 +1504,7 @@ func (h *jobsInsertHandler) importFromGCS(ctx context.Context, r *jobsInsertRequ
 		return nil, fmt.Errorf("failed to start transaction: %w", err)
 	}
 	defer tx.RollbackIfNotCommitted()
-	if err := r.project.AddJob(
+	if err := r.server.metaRepo.InsertJob(
 		ctx,
 		tx.Tx(),
 		metadata.NewJob(
@@ -1611,7 +1611,7 @@ func (h *jobsInsertHandler) exportToGCS(ctx context.Context, r *jobsInsertReques
 		StartTime:    startTime.Unix(),
 		EndTime:      endTime.Unix(),
 	}
-	if err := r.project.AddJob(
+	if err := r.server.metaRepo.InsertJob(
 		ctx,
 		tx.Tx(),
 		metadata.NewJob(
@@ -1748,6 +1748,18 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 			r.server.metaCache.invalidate()
 			r.server.seqMu.Unlock()
 		}()
+		// The middleware hydrated r.project from the read cache (the hot
+		// query path needs no fresh tree); this branch mutates metadata
+		// through the project object, so re-hydrate fresh state now that
+		// seqMu is held (issue #14).
+		freshProject, err := r.server.metaRepo.FindProject(ctx, r.project.ID)
+		if err != nil {
+			return nil, err
+		}
+		if freshProject == nil {
+			return nil, errNotFound(fmt.Sprintf("project %s is not found", r.project.ID))
+		}
+		r.project = freshProject
 		if job.Configuration.Load != nil && len(job.Configuration.Load.SourceUris) != 0 {
 			// load from google cloud storage
 			job, err := h.importFromGCS(ctx, r)
@@ -2361,7 +2373,7 @@ func (h *jobsQueryHandler) Handle(ctx context.Context, r *jobsQueryRequest) (*in
 		job.Configuration.Query.DestinationTable = qs.DdlTargetTable
 	}
 	if !r.queryRequest.DryRun {
-		if err := r.project.AddJob(
+		if err := r.server.metaRepo.InsertJob(
 			ctx,
 			tx.Tx(),
 			metadata.NewJob(

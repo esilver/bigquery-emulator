@@ -31,6 +31,7 @@ type Server struct {
 	metaRepo       *metadata.Repository
 	contentRepo    *contentdata.Repository
 	fileCleanup    func() error
+	storageUnlock  func() error
 	httpServer     *http.Server
 	grpcServer     *grpc.Server
 	listenCallback func(httpAddr, grpcAddr string)
@@ -73,6 +74,11 @@ type Server struct {
 	jobWG      sync.WaitGroup
 	jobsCtx    context.Context
 	jobsCancel context.CancelFunc
+
+	// maxStmtDuration is the statement watchdog budget applied to every
+	// async query job's engine span (issue #14); see
+	// resolveMaxStatementDuration. Zero disables the watchdog.
+	maxStmtDuration time.Duration
 }
 
 // SetListenCallback registers a function invoked once the HTTP and gRPC
@@ -90,6 +96,7 @@ func New(storage Storage) (*Server, error) {
 		anonTables: map[string]string{},
 	}
 	server.jobsCtx, server.jobsCancel = context.WithCancel(context.Background())
+	server.maxStmtDuration = resolveMaxStatementDuration()
 	if storage == TempStorage {
 		f, err := os.CreateTemp("", "")
 		if err != nil {
@@ -114,6 +121,15 @@ func New(storage Storage) (*Server, error) {
 			return err
 		}
 	}
+	// Exclusive single-writer lock on the database file (issue #14): the
+	// wasm engine has no file locking, so a second emulator on the same
+	// file would corrupt it silently. Must be held BEFORE the engine opens
+	// the file.
+	unlock, err := lockStorage(storage)
+	if err != nil {
+		return nil, err
+	}
+	server.storageUnlock = unlock
 	db, err := sql.Open("googlesqlite", string(storage))
 	if err != nil {
 		return nil, err
@@ -200,6 +216,11 @@ func (s *Server) Close() error {
 	if err := s.db.Close(); err != nil {
 		log.Printf("failed to close database: %s", err.Error())
 		return err
+	}
+	if s.storageUnlock != nil {
+		if err := s.storageUnlock(); err != nil {
+			log.Printf("failed to release storage lock: %s", err.Error())
+		}
 	}
 	return nil
 }
