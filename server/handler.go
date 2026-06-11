@@ -1740,9 +1740,14 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 	if job.Configuration.Query == nil {
 		// The load/extract paths execute synchronously and mutate metadata
 		// and content state; they ran under the global request mutex before
-		// the jobs.insert route bypassed it, so serialize them here.
+		// the jobs.insert route bypassed it, so serialize them here (and
+		// invalidate the metadata read cache before releasing the lock,
+		// like every serialized write section).
 		r.server.seqMu.Lock()
-		defer r.server.seqMu.Unlock()
+		defer func() {
+			r.server.metaCache.invalidate()
+			r.server.seqMu.Unlock()
+		}()
 		if job.Configuration.Load != nil && len(job.Configuration.Load.SourceUris) != 0 {
 			// load from google cloud storage
 			job, err := h.importFromGCS(ctx, r)
@@ -1808,7 +1813,21 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 		return nil, fmt.Errorf("failed to add job: %w", err)
 	}
 	r.server.startQueryJob(pendingJob)
-	_, _, _, _ = pendingJob.WaitForResult(ctx, insertDoneGrace)
+	// Read-only jobs answer after a short grace (fast ones report DONE, the
+	// rest report RUNNING and complete through the long poll — issue #3).
+	// State-MUTATING jobs (DDL, DML, CTAS, explicit destinations) answer
+	// like the old synchronous handler did, once the job has completed: a
+	// client that ran DDL through jobs.insert may read metadata immediately
+	// without polling (e.g. the Go client's Query.Run + Tables iterator),
+	// and with reads no longer serialized behind the writer (issue #12)
+	// that pattern would otherwise race the job goroutine. The wait costs a
+	// writer nothing overall — completion gates its node either way — and
+	// writers were serialized through their whole request before issue #3.
+	wait := insertDoneGrace
+	if insertStats.StatementType != "SELECT" || job.Configuration.Query.DestinationTable != nil {
+		wait = insertWriteJobWait
+	}
+	_, _, _, _ = pendingJob.WaitForResult(ctx, wait)
 	return pendingJob.ContentSnapshot(), nil
 }
 
@@ -3135,10 +3154,17 @@ func (h *tablesGetHandler) Handle(ctx context.Context, r *tablesGetRequest) (*bi
 	}
 	// Populate NumRows from the backing table so clients that depend on it
 	// (e.g. Table.getNumRows) observe an accurate count. Views and external
-	// tables have no backing row store and are left untouched.
+	// tables have no backing row store and are left untouched. The count is
+	// an engine query, so it is served from the metadata read cache when
+	// possible — otherwise a tables.get would queue behind whatever
+	// statement the engine is executing (issue #12).
 	if table.Type == "" || table.Type == "TABLE" {
-		if numRows, err := h.countRows(ctx, r); err == nil {
+		key := r.project.ID + "/" + r.dataset.ID + "/" + r.table.ID
+		if numRows, ok, gen := r.server.metaCache.lookupRowCount(key); ok {
 			table.NumRows = uint64(numRows)
+		} else if numRows, err := h.countRows(ctx, r); err == nil {
+			table.NumRows = uint64(numRows)
+			r.server.metaCache.storeRowCount(key, numRows, gen)
 		}
 	}
 	return table, nil

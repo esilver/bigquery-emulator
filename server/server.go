@@ -36,12 +36,22 @@ type Server struct {
 	listenCallback func(httpAddr, grpcAddr string)
 
 	// seqMu serializes every state-mutating code path (it replaces the old
-	// per-request global mutex). Handlers other than the async query-job
-	// routes still take it for their whole request via
-	// sequentialAccessMiddleware; the async jobs.insert path and its job
-	// goroutines take it only around their metadata/engine write sections,
-	// so concurrent read-only (SELECT) query jobs overlap freely.
+	// per-request global mutex): mutating handlers take it for their whole
+	// request via sequentialAccessMiddleware, and the async query-job
+	// goroutines take it around their metadata/engine write sections.
+	// Read-only paths never take it (issue #12): GET routes bypass the
+	// middleware and hydrate through metaCache, and read-only (SELECT)
+	// query jobs overlap freely (issue #3). What seqMu actually protects:
+	// DuckDB write transactions from each other (the engine uses optimistic
+	// concurrency control, so concurrent write transactions abort), and the
+	// read-modify-write cycles on metadata rows (e.g. AddJob rewriting the
+	// projects row from a hydration that must not go stale mid-flight).
 	seqMu sync.Mutex
+
+	// metaCache serves project hydration for read-only request paths without
+	// touching the database; every seqMu write section invalidates it before
+	// its write becomes observable. See metacache.go for the full model.
+	metaCache metaCache
 
 	// Live query jobs (and a bounded ring of recently completed ones),
 	// keyed by projectID/jobID. getQueryResults long-polls the live
@@ -217,6 +227,7 @@ func (s *Server) SetProject(id string) error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	s.metaCache.invalidate()
 	return nil
 }
 
@@ -281,6 +292,9 @@ func (s *Server) SetLogFormat(format LogFormat) error {
 }
 
 func (s *Server) Load(sources ...Source) error {
+	// Sources write metadata outside the request middleware, so the read
+	// cache is invalidated here once they are done.
+	defer s.metaCache.invalidate()
 	for _, source := range sources {
 		if err := source(s); err != nil {
 			return err
