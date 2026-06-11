@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -49,7 +51,43 @@ const (
 	// registry (with their in-memory responses); older ones are served from
 	// the metadata store.
 	completedJobRingSize = 256
+
+	// maxStatementDurationEnvName overrides the statement watchdog budget
+	// (issue #14): a Go duration string ("90s", "10m"); "0" disables the
+	// watchdog entirely.
+	maxStatementDurationEnvName = "BIGQUERY_EMULATOR_MAX_STATEMENT_DURATION"
+
+	// defaultMaxStatementDuration is the watchdog budget applied when the
+	// environment does not override it. Generous: the slowest legitimate
+	// single statements observed in real dbt builds run in seconds, and the
+	// synchronous jobs.insert wait path already gives up after 4m.
+	defaultMaxStatementDuration = 5 * time.Minute
 )
+
+// resolveMaxStatementDuration reads the statement watchdog budget from the
+// environment (once per Server, in New).
+//
+// The async job goroutine is detached from any request context (a client
+// disconnect or retry deadline cancels nothing), so without a budget one
+// pathological statement holds its transaction — and with it seqMu — forever,
+// wedging every writer behind it (issue #14). The budget context cancels
+// through database/sql: the googlesqlite layer decomposes a job into many
+// engine statements (catalog sync, the main statement, schema sync), and
+// every one re-checks the context on entry, so an expired budget fails the
+// job at the next statement boundary, the transaction rolls back, and the
+// locks release — one failed node instead of a wedged server.
+func resolveMaxStatementDuration() time.Duration {
+	v := os.Getenv(maxStatementDurationEnvName)
+	if v == "" {
+		return defaultMaxStatementDuration
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		log.Printf("invalid %s=%q, using default %s", maxStatementDurationEnvName, v, defaultMaxStatementDuration)
+		return defaultMaxStatementDuration
+	}
+	return d
+}
 
 func liveJobKey(projectID, jobID string) string {
 	return projectID + "/" + jobID
@@ -65,19 +103,21 @@ func (s *Server) liveJob(projectID, jobID string) *metadata.Job {
 }
 
 // registerAndPersistJob writes the pending job into the metadata store (and
-// the live registry). The project is re-hydrated under seqMu: the
-// projects-row update inside AddJob must be based on the current job list,
-// not the snapshot hydrated before the lock was taken.
+// the live registry) at FLAT COST under seqMu (issue #14).
+//
+// It used to hydrate the WHOLE project (every job row including its full
+// persisted result payload) and rewrite the projects-row jobIDs array just
+// to add one job. That made every jobs.insert Θ(total jobs) work while
+// holding the global write lock; a dbt build at threads 4 — with its
+// read-timeout retry storms — accumulates thousands of job rows, the
+// per-insert lock hold grew into seconds, and the seqMu queue collapsed
+// into the reported server-wide wedge (writers stuck 3-22 minutes, the
+// current lock holder always RUNNABLE inside engine code servicing the
+// hydration's statements). Now: one existence probe, one duplicate probe,
+// one insert.
 func (s *Server) registerAndPersistJob(ctx context.Context, projectID string, job *metadata.Job) error {
 	s.seqMu.Lock()
 	defer s.seqMu.Unlock()
-	project, err := s.metaRepo.FindProject(ctx, projectID)
-	if err != nil {
-		return err
-	}
-	if project == nil {
-		return errNotFound(fmt.Sprintf("project %s is not found", projectID))
-	}
 	conn, err := s.connMgr.Connection(ctx, projectID, "")
 	if err != nil {
 		return fmt.Errorf("failed to get connection: %w", err)
@@ -87,7 +127,17 @@ func (s *Server) registerAndPersistJob(ctx context.Context, projectID string, jo
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
 	defer tx.RollbackIfNotCommitted()
-	if err := project.AddJob(ctx, tx.Tx(), job); err != nil {
+	if err := tx.MetadataRepoMode(); err != nil {
+		return err
+	}
+	exists, err := s.metaRepo.ProjectExistsWithConn(ctx, tx.Tx(), projectID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return errNotFound(fmt.Sprintf("project %s is not found", projectID))
+	}
+	if err := s.metaRepo.InsertJob(ctx, tx.Tx(), job); err != nil {
 		return fmt.Errorf("failed to add job: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -207,9 +257,26 @@ func (s *Server) runQueryJob(job *metadata.Job) {
 		s.markJobCompleted(job)
 	}()
 
+	// Statement watchdog (issue #14): bound the whole engine span of the job
+	// with a budget context. The transaction below is opened on execCtx, so
+	// database/sql's transaction watcher rolls it back the moment the budget
+	// expires (even mid-statement, through the driver's proven cancellation
+	// path), and every inner engine statement the googlesqlite layer issues
+	// re-checks execCtx on entry. Post-commit metadata bookkeeping
+	// (syncCatalog, syncSchemaDDL, persistJobResult) deliberately stays on
+	// the undeadlined ctx: once the engine work committed, aborting the
+	// bookkeeping halfway would leave metadata inconsistent with storage.
+	execCtx := ctx
+	if budget := s.maxStmtDuration; budget > 0 {
+		var cancelExec context.CancelFunc
+		execCtx, cancelExec = context.WithTimeoutCause(ctx, budget,
+			fmt.Errorf("statement exceeded the %s watchdog budget (%s)", budget, maxStatementDurationEnvName))
+		defer cancelExec()
+	}
+
 	// The query may reference the anonymous result table of an earlier job;
 	// materialize before any lock is taken (lock order: anonMu -> seqMu).
-	if err := s.materializeAnonTablesReferencedIn(ctx, job.ProjectID, query); err != nil {
+	if err := s.materializeAnonTablesReferencedIn(execCtx, job.ProjectID, query); err != nil {
 		jobErr = err
 		return
 	}
@@ -225,12 +292,12 @@ func (s *Server) runQueryJob(job *metadata.Job) {
 		}
 	}()
 
-	conn, err := s.connMgr.Connection(ctx, job.ProjectID, "")
+	conn, err := s.connMgr.Connection(execCtx, job.ProjectID, "")
 	if err != nil {
 		jobErr = fmt.Errorf("failed to get connection: %w", err)
 		return
 	}
-	tx, err := conn.Begin(ctx)
+	tx, err := conn.Begin(execCtx)
 	if err != nil {
 		jobErr = fmt.Errorf("failed to start transaction: %w", err)
 		return
@@ -238,10 +305,10 @@ func (s *Server) runQueryJob(job *metadata.Job) {
 	defer tx.RollbackIfNotCommitted()
 	// DROP SCHEMA is not supported by the dialect layer yet; execute it at
 	// the emulator layer instead (issue #8).
-	response, jobErr = handleDropSchemaQuery(ctx, s, job.ProjectID, query, false)
+	response, jobErr = handleDropSchemaQuery(execCtx, s, job.ProjectID, query, false)
 	if jobErr == nil && response == nil {
 		response, jobErr = s.contentRepo.Query(
-			ctx,
+			execCtx,
 			tx,
 			job.ProjectID,
 			"",
@@ -250,7 +317,12 @@ func (s *Server) runQueryJob(job *metadata.Job) {
 		)
 	}
 	if jobErr == nil && hasDestinationTable {
-		jobErr = s.insertQueryResultIntoDestinationTable(ctx, tx, job, response)
+		jobErr = s.insertQueryResultIntoDestinationTable(execCtx, tx, job, response)
+	}
+	if jobErr != nil && execCtx.Err() != nil {
+		// Surface the watchdog verdict instead of a bare "context deadline
+		// exceeded" so the failed node names the budget that fired.
+		jobErr = fmt.Errorf("%w: %v", jobErr, context.Cause(execCtx))
 	}
 	if jobErr != nil {
 		return
