@@ -158,7 +158,9 @@ func TestQueryJobStatementType(t *testing.T) {
 	}{
 		{name: "select", query: "SELECT 1 AS x", wantType: "SELECT", wantDestination: true},
 		{name: "create table", query: "CREATE TABLE d4.st_plain (x INT64)", wantType: "CREATE_TABLE", wantDDLOp: "CREATE", wantTargetTable: "st_plain"},
-		{name: "create table as select", query: "CREATE TABLE d4.st_ctas AS SELECT 1 AS x", wantType: "CREATE_TABLE_AS_SELECT", wantDDLOp: "CREATE", wantTargetTable: "st_ctas"},
+		// CTAS carries the created table as its destination (issue #11),
+		// like real BigQuery; dbt reads job.destination on this branch.
+		{name: "create table as select", query: "CREATE TABLE d4.st_ctas AS SELECT 1 AS x", wantType: "CREATE_TABLE_AS_SELECT", wantDestination: true, wantDDLOp: "CREATE", wantTargetTable: "st_ctas"},
 		{name: "create view", query: "CREATE VIEW d4.st_v AS SELECT x FROM d4.st_ctas", wantType: "CREATE_VIEW", wantDDLOp: "CREATE", wantTargetTable: "st_v"},
 		{name: "create or replace view", query: "CREATE OR REPLACE VIEW d4.st_v AS SELECT x FROM d4.st_ctas", wantType: "CREATE_VIEW", wantDDLOp: "REPLACE", wantTargetTable: "st_v"},
 		{name: "insert", query: "INSERT INTO d4.st_plain (x) VALUES (1)", wantType: "INSERT"},
@@ -704,5 +706,130 @@ func TestCSVLoadSkipLeadingRows(t *testing.T) {
 	}
 	if rows := tableRows("t_seed"); fmt.Sprint(rows) != "[[x 1] [y 2]]" {
 		t.Fatalf("dbt-seed shape (header + skipLeadingRows 1) broke, got %v", rows)
+	}
+}
+
+// Issue #11: a CTAS job through jobs.insert reports the created table in
+// BOTH configuration.query.destinationTable (what dbt's job.destination
+// reads) and statistics.query.ddlTargetTable, tables.get on that reference
+// succeeds, and CREATE VIEW keeps destinationTable unset with ddlTargetTable
+// set.
+func TestCTASDestinationTable(t *testing.T) {
+	ts := newDBTTestServer(t)
+	mustCreateDataset(t, ts.URL, "d11")
+
+	if code, res := insertQueryJob(t, ts.URL, "ctas11", "CREATE TABLE d11.ctas_dest AS SELECT 1 AS x UNION ALL SELECT 2"); code != http.StatusOK {
+		t.Fatalf("jobs.insert: %d %v", code, res)
+	}
+	job := awaitQueryJob(t, ts.URL, "ctas11")
+	if errResult := lookupMap(job, "status", "errorResult"); errResult != nil {
+		t.Fatalf("CTAS job failed: %v", errResult)
+	}
+	stats := lookupMap(job, "statistics", "query")
+	if got, _ := stats["statementType"].(string); got != "CREATE_TABLE_AS_SELECT" {
+		t.Fatalf("statementType = %q, want CREATE_TABLE_AS_SELECT", got)
+	}
+	wantRef := map[string]string{"projectId": "test", "datasetId": "d11", "tableId": "ctas_dest"}
+	for _, field := range []struct {
+		name string
+		ref  map[string]any
+	}{
+		{"configuration.query.destinationTable", lookupMap(job, "configuration", "query", "destinationTable")},
+		{"statistics.query.ddlTargetTable", lookupMap(stats, "ddlTargetTable")},
+	} {
+		if field.ref == nil {
+			t.Fatalf("CTAS job missing %s: %v", field.name, job)
+		}
+		for k, want := range wantRef {
+			if got, _ := field.ref[k].(string); got != want {
+				t.Errorf("%s.%s = %q, want %q", field.name, k, got, want)
+			}
+		}
+	}
+	// tables.get on the destination must succeed (dbt reads num_rows there).
+	code, table := httpJSON(t, "GET", ts.URL+"/bigquery/v2/projects/test/datasets/d11/tables/ctas_dest", "", nil)
+	if code != http.StatusOK {
+		t.Fatalf("tables.get on CTAS destination: %d %v", code, table)
+	}
+	if got, _ := table["numRows"].(string); got != "2" {
+		t.Errorf("tables.get numRows = %q, want %q", got, "2")
+	}
+
+	// CREATE VIEW: ddlTargetTable set, destinationTable stays unset.
+	if code, res := insertQueryJob(t, ts.URL, "cv11", "CREATE VIEW d11.v_dest AS SELECT x FROM d11.ctas_dest"); code != http.StatusOK {
+		t.Fatalf("jobs.insert view: %d %v", code, res)
+	}
+	view := awaitQueryJob(t, ts.URL, "cv11")
+	if errResult := lookupMap(view, "status", "errorResult"); errResult != nil {
+		t.Fatalf("CREATE VIEW job failed: %v", errResult)
+	}
+	if dest := lookupMap(view, "configuration", "query", "destinationTable"); dest != nil {
+		t.Errorf("CREATE VIEW must not carry a destination table, got %v", dest)
+	}
+	if target := lookupMap(view, "statistics", "query", "ddlTargetTable"); target == nil {
+		t.Errorf("CREATE VIEW missing ddlTargetTable")
+	}
+}
+
+// Issue #13: deterministic analysis errors must surface in real BigQuery's
+// non-retryable shapes — a missing table/dataset as HTTP 404 reason notFound
+// with a "Not found: Table project:dataset.table" message, every other
+// analysis error (syntax, unknown column) as HTTP 400 reason invalidQuery —
+// on jobs.query, on the completed async job's errorResult, and on the
+// getQueryResults long-poll. jobInternalError (which clients retry) is
+// reserved for genuine emulator faults.
+func TestAnalysisErrorClassification(t *testing.T) {
+	ts := newDBTTestServer(t)
+	mustCreateDataset(t, ts.URL, "d13")
+	if code, res := syncQuery(t, ts.URL, "CREATE TABLE d13.src AS SELECT 1 AS x"); code != http.StatusOK {
+		t.Fatalf("setup: %d %v", code, res)
+	}
+
+	errorMessage := func(res map[string]any) string {
+		errObj := lookupMap(res, "error")
+		if errObj == nil {
+			return ""
+		}
+		msg, _ := errObj["message"].(string)
+		return msg
+	}
+
+	// jobs.query, missing table -> 404 notFound, real BigQuery message shape.
+	code, res := syncQuery(t, ts.URL, "SELECT x FROM d13.does_not_exist_xyz")
+	if code != http.StatusNotFound || errorReason(res) != "notFound" {
+		t.Fatalf("missing table = %d %q, want 404 notFound: %v", code, errorReason(res), res)
+	}
+	if msg := errorMessage(res); !strings.Contains(msg, "Not found: Table test:d13.does_not_exist_xyz") {
+		t.Errorf("missing-table message = %q, want it to contain %q", msg, "Not found: Table test:d13.does_not_exist_xyz")
+	}
+
+	// jobs.query, syntax error and unknown column -> 400 invalidQuery.
+	for _, q := range []string{"SELEC x FROM d13.src", "SELECT nope FROM d13.src"} {
+		code, res := syncQuery(t, ts.URL, q)
+		if code != http.StatusBadRequest || errorReason(res) != "invalidQuery" {
+			t.Errorf("%q = %d %q, want 400 invalidQuery: %v", q, code, errorReason(res), res)
+		}
+	}
+
+	// jobs.insert (async): the completed job's errorResult carries the same
+	// classification, and the getQueryResults long-poll answers 404.
+	if code, res := insertQueryJob(t, ts.URL, "missing13", "SELECT x FROM d13.does_not_exist_xyz"); code != http.StatusOK {
+		t.Fatalf("jobs.insert: %d %v", code, res)
+	}
+	gqrCode, gqr := httpJSON(t, "GET",
+		ts.URL+"/bigquery/v2/projects/test/queries/missing13?timeoutMs=10000&maxResults=0", "", nil)
+	if gqrCode != http.StatusNotFound || errorReason(gqr) != "notFound" {
+		t.Errorf("getQueryResults on missing-table job = %d %q, want 404 notFound: %v", gqrCode, errorReason(gqr), gqr)
+	}
+	_, job := httpJSON(t, "GET", ts.URL+"/bigquery/v2/projects/test/jobs/missing13", "", nil)
+	errResult := lookupMap(job, "status", "errorResult")
+	if errResult == nil {
+		t.Fatalf("missing-table job has no errorResult: %v", job)
+	}
+	if got, _ := errResult["reason"].(string); got != "notFound" {
+		t.Errorf("errorResult.reason = %q, want notFound: %v", got, errResult)
+	}
+	if msg, _ := errResult["message"].(string); !strings.Contains(msg, "Not found: Table test:d13.does_not_exist_xyz") {
+		t.Errorf("errorResult.message = %q, want real BigQuery's Not found shape", msg)
 	}
 }

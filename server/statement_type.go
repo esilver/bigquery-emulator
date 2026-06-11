@@ -223,11 +223,53 @@ func ddlTargetTable(cc *googlesqlite.ChangedCatalog) *bigqueryv2.TableReference 
 	return nil
 }
 
+// ctasDestinationTableRef resolves, best effort, the table a CREATE TABLE AS
+// SELECT statement creates into a full TableReference at insert time (issue
+// #11). Real BigQuery pre-fills configuration.query.destinationTable on CTAS
+// jobs before they complete; clients such as dbt-bigquery read
+// job.destination (which maps to that field, not to ddlTargetTable) right
+// after completion. Completion overwrites this with the authoritative
+// reference from the engine's ChangedCatalog, so a nil here (unparseable
+// name, no default dataset) only loses the RUNNING-state pre-fill.
+func ctasDestinationTableRef(projectID string, queryConfig *bigqueryv2.JobConfigurationQuery) *bigqueryv2.TableReference {
+	parts := createTableTargetPath(queryConfig.Query)
+	switch len(parts) {
+	case 3:
+		return &bigqueryv2.TableReference{ProjectId: parts[0], DatasetId: parts[1], TableId: parts[2]}
+	case 2:
+		return &bigqueryv2.TableReference{ProjectId: projectID, DatasetId: parts[0], TableId: parts[1]}
+	case 1:
+		if dd := queryConfig.DefaultDataset; dd != nil && dd.DatasetId != "" {
+			pid := dd.ProjectId
+			if pid == "" {
+				pid = projectID
+			}
+			return &bigqueryv2.TableReference{ProjectId: pid, DatasetId: dd.DatasetId, TableId: parts[0]}
+		}
+	}
+	return nil
+}
+
 // schemaDDLTargetPath extracts the case-preserved name path of the schema
 // targeted by a CREATE/DROP/ALTER SCHEMA statement: "d2" -> [d2],
 // "proj.d2" -> [proj, d2], "`proj.d2`" -> [proj, d2]. It returns nil when
 // the statement is not a schema DDL or the name cannot be parsed.
 func schemaDDLTargetPath(query string) []string {
+	return ddlTargetNamePath(query, "SCHEMA")
+}
+
+// createTableTargetPath extracts the case-preserved name path of the table
+// targeted by a CREATE [OR REPLACE] [TEMP] TABLE statement. It returns nil
+// when the statement is not a table DDL or the name cannot be parsed.
+func createTableTargetPath(query string) []string {
+	return ddlTargetNamePath(query, "TABLE")
+}
+
+// ddlTargetNamePath extracts the case-preserved name path of the object
+// targeted by a CREATE/DROP/ALTER <object> statement, skipping the modifier
+// keywords (OR REPLACE, TEMP) that may precede the object keyword and the
+// IF [NOT] EXISTS clause that may follow it.
+func ddlTargetNamePath(query string, object string) []string {
 	s := query
 	i, n := 0, len(s)
 	skip := func() { // whitespace and comments
@@ -274,9 +316,20 @@ func schemaDDLTargetPath(query string) []string {
 	default:
 		return nil
 	}
-	skip()
-	if strings.ToUpper(word()) != "SCHEMA" {
-		return nil
+	// Modifier keywords before the object keyword (CREATE OR REPLACE TABLE,
+	// CREATE TEMP TABLE, ...). All of them are reserved words, so an object
+	// actually named e.g. "temp" would be backtick-quoted and unaffected.
+modifiers:
+	for {
+		skip()
+		switch strings.ToUpper(word()) {
+		case "OR", "REPLACE", "TEMP", "TEMPORARY":
+			continue
+		case object:
+			break modifiers
+		default:
+			return nil
+		}
 	}
 	// Optional IF [NOT] EXISTS. The keywords are reserved, so a schema
 	// actually named "exists" would be backtick-quoted and unaffected.

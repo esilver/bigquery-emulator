@@ -1231,7 +1231,7 @@ func (h *jobsGetQueryResultsHandler) ServeHTTP(w http.ResponseWriter, r *http.Re
 	if err != nil {
 		// Keep the typed error of a failed job (e.g. 404 notFound for a
 		// CREATE_NEVER destination): clients branch on the reason/code.
-		errorResponse(ctx, w, jobErrorProto(err))
+		errorResponse(ctx, w, jobErrorProto(project.ID, err))
 		return
 	}
 	encodeResponse(ctx, w, res)
@@ -1346,7 +1346,7 @@ func (h *jobsInsertHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// for a missing destination table under CREATE_NEVER) and maps
 		// duplicate-object failures to 409/duplicate; the rest fall back
 		// to a 400 jobInternalError.
-		errorResponse(ctx, w, jobErrorProto(err))
+		errorResponse(ctx, w, jobErrorProto(project.ID, err))
 		return
 	}
 	encodeResponse(ctx, w, res)
@@ -1784,13 +1784,24 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 	// through the getQueryResults long poll (or a jobs.get poll).
 	now := time.Now()
 	job.Status = &bigqueryv2.JobStatus{State: "RUNNING"}
+	insertStats := queryJobStatistics(job.Configuration.Query.Query, nil, 0)
 	job.Statistics = &bigqueryv2.JobStatistics{
 		CreationTime: now.Unix(),
 		StartTime:    now.Unix(),
 		// The statement type is known before execution (clients such as
 		// dbt-bigquery branch on it); completion refines the rest of the
 		// query statistics (ddlTargetTable, bytes).
-		Query: queryJobStatistics(job.Configuration.Query.Query, nil, 0),
+		Query: insertStats,
+	}
+	// Real BigQuery pre-fills configuration.query.destinationTable with the
+	// to-be-created table on CTAS jobs (issue #11); pre-fill it best effort
+	// when the table name parses out of the statement. Completion overwrites
+	// it with the authoritative reference from the engine's ChangedCatalog.
+	if insertStats.StatementType == "CREATE_TABLE_AS_SELECT" &&
+		job.Configuration.Query.DestinationTable == nil {
+		if ref := ctasDestinationTableRef(r.project.ID, job.Configuration.Query); ref != nil {
+			job.Configuration.Query.DestinationTable = ref
+		}
 	}
 	pendingJob := metadata.NewPendingJob(r.server.metaRepo, r.project.ID, job.JobReference.JobId, job)
 	if err := r.server.registerAndPersistJob(ctx, r.project.ID, pendingJob); err != nil {
@@ -1835,7 +1846,7 @@ func (h *jobsInsertHandler) handleDryRun(ctx context.Context, r *jobsInsertReque
 	}
 	status := &bigqueryv2.JobStatus{State: "DONE"}
 	if jobErr != nil {
-		jobProtoErr := jobErrorProto(jobErr)
+		jobProtoErr := jobErrorProto(r.project.ID, jobErr)
 		status.ErrorResult = jobProtoErr.ErrorProto()
 		status.Errors = []*bigqueryv2.ErrorProto{jobProtoErr.ErrorProto()}
 	}
@@ -2222,7 +2233,7 @@ func (h *jobsQueryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Duplicate-object failures (e.g. CREATE TABLE on an existing
 		// table) surface as 409/duplicate like real BigQuery; other typed
 		// errors keep their reason; the rest fall back to jobInternalError.
-		errorResponse(ctx, w, jobErrorProto(err))
+		errorResponse(ctx, w, jobErrorProto(project.ID, err))
 		return
 	}
 	encodeResponse(ctx, w, res)
@@ -2323,6 +2334,12 @@ func (h *jobsQueryHandler) Handle(ctx context.Context, r *jobsQueryRequest) (*in
 			r.project.ID,
 			jobID,
 		),
+	}
+	// CTAS reports the created table as the job's destination (issue #11),
+	// mirroring the async jobs.insert path, so jobs.get on a jobs.query-made
+	// job classifies identically.
+	if qs := job.Statistics.Query; qs.StatementType == "CREATE_TABLE_AS_SELECT" && qs.DdlTargetTable != nil {
+		job.Configuration.Query.DestinationTable = qs.DdlTargetTable
 	}
 	if !r.queryRequest.DryRun {
 		if err := r.project.AddJob(

@@ -122,8 +122,14 @@ func (s *Server) runQueryJob(job *metadata.Job) {
 	content := job.Content()
 	queryConfig := content.Configuration.Query
 	query := queryConfig.Query
-	hasDestinationTable := queryConfig.DestinationTable != nil
 	stmtType := statementTypeForQuery(query, nil)
+	// A CTAS job carries the created table in
+	// configuration.query.destinationTable (pre-filled at insert time, issue
+	// #11), but the table is created by the engine itself — it must not run
+	// through the explicit-destination machinery below, which would try to
+	// re-create it and insert the (empty) DDL response.
+	hasDestinationTable := queryConfig.DestinationTable != nil &&
+		stmtType != "CREATE_TABLE_AS_SELECT"
 	// Read-only jobs (a SELECT without an explicit destination — the dbt
 	// test/probe shape) run without the global write lock and therefore
 	// overlap with each other; anything that mutates engine or metadata
@@ -152,7 +158,7 @@ func (s *Server) runQueryJob(job *metadata.Job) {
 		queryStats := queryJobStatistics(query, response, totalBytes)
 		status := &bigqueryv2.JobStatus{State: "DONE"}
 		if jobErr != nil {
-			jobProtoErr := jobErrorProto(jobErr)
+			jobProtoErr := jobErrorProto(job.ProjectID, jobErr)
 			status.ErrorResult = jobProtoErr.ErrorProto()
 			status.Errors = []*bigqueryv2.ErrorProto{jobProtoErr.ErrorProto()}
 		}
@@ -164,6 +170,18 @@ func (s *Server) runQueryJob(job *metadata.Job) {
 				StartTime:           startTime.Unix(),
 				EndTime:             endTime.Unix(),
 				TotalBytesProcessed: totalBytes,
+			}
+			// A completed CTAS job reports the created table as its
+			// destination (issue #11): real BigQuery populates
+			// configuration.query.destinationTable on CTAS, and dbt-bigquery
+			// reads job.destination (this field, not ddlTargetTable) to fetch
+			// num_rows. The reference derived from the engine's
+			// ChangedCatalog is authoritative and overwrites the best-effort
+			// insert-time pre-fill. CREATE VIEW and other DDL keep the
+			// destination unset.
+			if jobErr == nil && queryStats.StatementType == "CREATE_TABLE_AS_SELECT" &&
+				queryStats.DdlTargetTable != nil {
+				content.Configuration.Query.DestinationTable = queryStats.DdlTargetTable
 			}
 		})
 		if err := s.persistJobResult(ctx, job, response, jobErr); err != nil {
