@@ -207,17 +207,20 @@ func TestConcurrentLoadDoesNotWedge(t *testing.T) {
 						worker, uniq, i,
 					)
 				case 2:
+					// dbt's incremental MERGE strategy (re-armed: the
+					// googlesqlite MERGE lowering is fixed in v0.2.21 and
+					// duckdb-go-pure v0.3.5 interrupts bound the former
+					// ROLLBACK-livelock feeder — this arm is the #14
+					// livelock-recipe re-trigger and must run clean).
+					if i%2 == 0 {
+						q = fmt.Sprintf(
+							"MERGE stress.sink t USING (SELECT id + %d AS id, CONCAT(name, '_%s') AS name FROM stress.seed) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET name = s.name WHEN NOT MATCHED THEN INSERT (id, name) VALUES (s.id, s.name)",
+							i*7, uniq,
+						)
+						break
+					}
 					// dbt's incremental delete+insert strategy: stage into a
 					// temp table, delete the overlap, insert the stage.
-					// (The MERGE strategy is deliberately NOT exercised here:
-					// googlesqlite's MERGE lowering is broken in v0.2.20 —
-					// unparenthesized subquery-USING and backtick-quoted
-					// aliases in the UPDATE..FROM/INSERT branches — and a
-					// statement that fails MID-transaction poisons the
-					// pooled engine transaction, which feeds a separate
-					// engine-side ROLLBACK livelock. Both are engine-lane
-					// bugs tracked outside this repo; this test gates the
-					// EMULATOR's locking/metadata behavior.)
 					stage := fmt.Sprintf("stress.stage_w%d", worker)
 					if err := wedgeGuard(fmt.Sprintf("worker %d stage %d", worker, i), func() error {
 						_, err := runQuery(fmt.Sprintf(
