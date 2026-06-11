@@ -4421,3 +4421,81 @@ func TestExportDataStatement(t *testing.T) {
 		}
 	})
 }
+
+// TestResumableUploadLocationHonorsRequestHost covers #16: the session URL
+// in the Location header must be reachable by the client that initiated the
+// upload. Behind a port mapping (docker -p) or reverse proxy the bind
+// address is not, so the URL derives from X-Forwarded-* or the request Host.
+func TestResumableUploadLocationHonorsRequestHost(t *testing.T) {
+	const projectID = "test"
+	ctx := context.Background()
+	bqServer, err := server.New(server.TempStorage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bqServer.Load(server.StructSource(
+		types.NewProject(projectID, types.NewDataset("dataset1")),
+	)); err != nil {
+		t.Fatal(err)
+	}
+	testServer := bqServer.TestServer()
+	defer func() {
+		testServer.Close()
+		bqServer.Stop(ctx)
+	}()
+
+	jobJSON := `{"jobReference":{"projectId":"test","jobId":"resumable-loc-1"},` +
+		`"configuration":{"load":{"sourceFormat":"CSV",` +
+		`"destinationTable":{"projectId":"test","datasetId":"dataset1","tableId":"uploaded2"}}}}`
+
+	for _, tc := range []struct {
+		name    string
+		headers map[string]string
+		host    string
+		jobID   string
+		want    string
+	}{
+		{
+			name:  "request host wins over bind address",
+			host:  "mapped.example:9450",
+			jobID: "resumable-loc-1",
+			want:  "http://mapped.example:9450/upload/bigquery/v2/projects/test/jobs?uploadType=resumable&upload_id=resumable-loc-1",
+		},
+		{
+			name: "forwarded headers win over request host",
+			host: "mapped.example:9450",
+			headers: map[string]string{
+				"X-Forwarded-Host":  "proxy.example, inner.example",
+				"X-Forwarded-Proto": "https",
+			},
+			jobID: "resumable-loc-2",
+			want:  "https://proxy.example/upload/bigquery/v2/projects/test/jobs?uploadType=resumable&upload_id=resumable-loc-2",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := strings.Replace(jobJSON, "resumable-loc-1", tc.jobID, 1)
+			req, err := http.NewRequest(http.MethodPost,
+				testServer.URL+"/upload/bigquery/v2/projects/test/jobs?uploadType=resumable",
+				strings.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Host = tc.host
+			for k, v := range tc.headers {
+				req.Header.Set(k, v)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("resumable init: expected 200, got %d", resp.StatusCode)
+			}
+			if got := resp.Header.Get("Location"); got != tc.want {
+				t.Fatalf("Location mismatch:\n got %s\nwant %s", got, tc.want)
+			}
+		})
+	}
+}
