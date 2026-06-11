@@ -583,6 +583,15 @@ func TestStorageWrite(t *testing.T) {
 			if err != nil {
 				t.Fatalf("AppendRows first call error: %v", err)
 			}
+			// AppendRows is asynchronous; rows of default/committed streams
+			// are only guaranteed readable once the append is ACKNOWLEDGED
+			// (the server acks after committing). Reading before the ack
+			// raced the write, and only ever passed because the read path
+			// used to be slow enough to lose the race (it is served from
+			// the metadata read cache since issue #12).
+			if _, err := result.GetResult(ctx); err != nil {
+				t.Fatalf("AppendRows first call result: %v", err)
+			}
 
 			iter := bqClient.Dataset(datasetID).Table(tableID).Read(ctx)
 			resultRowCount := countRows(t, iter)
@@ -599,6 +608,10 @@ func TestStorageWrite(t *testing.T) {
 			result, err = managedStream.AppendRows(ctx, rows, managedwriter.WithOffset(curOffset))
 			if err != nil {
 				t.Fatalf("AppendRows second call error: %v", err)
+			}
+			// Await the acknowledgement before reading (see above).
+			if _, err := result.GetResult(ctx); err != nil {
+				t.Fatalf("AppendRows second call result: %v", err)
 			}
 
 			iter = bqClient.Dataset(datasetID).Table(tableID).Read(ctx)

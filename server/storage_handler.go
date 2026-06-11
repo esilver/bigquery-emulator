@@ -537,6 +537,8 @@ func (s *storageWriteServer) appendRows(req *storagepb.AppendRowsRequest, msgDes
 			s.sendErrorMessage(stream, streamName, err)
 			return err
 		}
+		// Data-write path outside seqMu: drop cached row counts.
+		s.server.metaCache.invalidate()
 	} else {
 		status.rows = append(status.rows, data...)
 	}
@@ -789,7 +791,10 @@ func (s *storageWriteServer) BatchCommitWriteStreams(ctx context.Context, req *s
 		}
 		if err := tx.Commit(); err != nil {
 			streamErrors = append(streamErrors, s.createUnspecifiedStorageError(streamName, err))
+			continue
 		}
+		// Data-write path outside seqMu: drop cached row counts.
+		s.server.metaCache.invalidate()
 	}
 	return &storagepb.BatchCommitWriteStreamsResponse{
 		CommitTime:   timestamppb.New(time.Now()),
@@ -829,6 +834,8 @@ func (s *storageWriteServer) FlushRows(ctx context.Context, req *storagepb.Flush
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	// Data-write path outside seqMu: drop cached row counts.
+	s.server.metaCache.invalidate()
 	return &storagepb.FlushRowsResponse{
 		Offset: offset,
 	}, nil
@@ -919,7 +926,9 @@ func getIDsFromPath(path string) (string, string, string, error) {
 }
 
 func getTableMetadata(ctx context.Context, server *Server, projectID, datasetID, tableID string) (*bigqueryv2.Table, error) {
-	project, err := server.metaRepo.FindProject(ctx, projectID)
+	// Read-only path: serve from the metadata read cache so a read session
+	// does not queue behind a running engine statement.
+	project, err := server.readProject(ctx, projectID)
 	if err != nil {
 		return nil, err
 	}

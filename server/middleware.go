@@ -29,27 +29,38 @@ func methodOverrideMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// sequentialAccessMiddleware serializes request handling on the server-wide
-// seqMu — the historical behaviour of the emulator — EXCEPT for the async
-// query-job routes, which manage their own locking:
+// sequentialAccessMiddleware serializes every state-MUTATING request on the
+// server-wide seqMu. Read-only requests do not take it at all (issue #12):
 //
-//   - jobs.insert returns immediately while the query runs in a job
-//     goroutine; the handler takes seqMu only around its (cheap) metadata
-//     writes, so concurrent SELECT jobs overlap (issue #3).
-//   - jobs.getQueryResults parks the request until the job completes or
-//     timeoutMs elapses (server-side long poll). Holding a global lock while
-//     parked would deadlock the server.
-//   - jobs.get is a read-only status poll and must stay responsive while
-//     jobs run.
+//   - GET routes never mutate engine or metadata state (audited: every GET
+//     handler only navigates the hydrated project tree or runs a SELECT in a
+//     rolled-back transaction), so they must not queue behind a running
+//     statement — the three round trips of one dbt query overlap another
+//     query's engine work, and metadata polls stay at ms while models build.
+//   - the async query-job routes manage their own locking (issue #3):
+//     jobs.insert returns immediately while the query runs in a job
+//     goroutine (which takes seqMu only around its write sections), and
+//     jobs.getQueryResults parks the request server-side until the job
+//     completes — holding a global lock while parked would deadlock the
+//     server.
+//
+// Everything else (POST/PATCH/PUT/DELETE, including the media-upload routes
+// and jobs.query, which executes arbitrary statements synchronously) still
+// serializes on seqMu, exactly like the historical global request mutex.
+// The metadata read cache is invalidated before the lock is released so the
+// writer's client observes its own write on its next read.
 func sequentialAccessMiddleware(s *Server) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if asyncJobRoute(r) {
+			if asyncJobRoute(r) || r.Method == http.MethodGet {
 				next.ServeHTTP(w, r)
 				return
 			}
 			s.seqMu.Lock()
-			defer s.seqMu.Unlock()
+			defer func() {
+				s.metaCache.invalidate()
+				s.seqMu.Unlock()
+			}()
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -80,6 +91,23 @@ func asyncJobRoute(r *http.Request) bool {
 		return true // jobs.getQueryResults
 	}
 	return false
+}
+
+// jobsListRoute reports whether the request is jobs.list (GET
+// /projects/{projectId}/jobs, bare or under the /bigquery/v2 prefix).
+func jobsListRoute(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	route := mux.CurrentRoute(r)
+	if route == nil {
+		return false
+	}
+	template, err := route.GetPathTemplate()
+	if err != nil {
+		return false
+	}
+	return strings.TrimPrefix(template, "/bigquery/v2") == "/projects/{projectId}/jobs"
 }
 
 // anonTableMaterializeMiddleware materializes a lazily-deferred anonymous
@@ -263,7 +291,23 @@ func withProjectMiddleware() func(http.Handler) http.Handler {
 						return
 					}
 				}
-				project, err := server.metaRepo.FindProject(ctx, projectID)
+				// Read-only routes hydrate through the metadata read cache so
+				// they never queue behind a running engine statement at the
+				// driver level. jobs.list is excluded: the cached project's
+				// job list is eventually consistent (job-row writes do not
+				// invalidate the cache), and listing is the one read that is
+				// ABOUT that list. Mutating routes hydrate fresh state under
+				// seqMu, which their handlers' read-modify-write cycles (e.g.
+				// AddJob rewriting the project's job list) depend on.
+				var (
+					project *metadata.Project
+					err     error
+				)
+				if r.Method == http.MethodGet && !jobsListRoute(r) {
+					project, err = server.readProject(ctx, projectID)
+				} else {
+					project, err = server.metaRepo.FindProject(ctx, projectID)
+				}
 				if err != nil {
 					w.WriteHeader(http.StatusInternalServerError)
 					fmt.Fprintln(w, err)
@@ -320,6 +364,14 @@ func withJobMiddleware() func(http.Handler) http.Handler {
 				job := serverFromContext(ctx).liveJob(project.ID, jobID)
 				if job == nil {
 					job = project.Job(jobID)
+				}
+				if job == nil {
+					// The project may have been served from the metadata read
+					// cache, whose job list is eventually consistent; check
+					// the store before answering 404.
+					if found, err := serverFromContext(ctx).metaRepo.FindJob(ctx, project.ID, jobID); err == nil && found != nil {
+						job = found
+					}
 				}
 				if job == nil {
 					errorResponse(ctx, w, errNotFound(fmt.Sprintf("job %s is not found", jobID)))

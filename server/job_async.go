@@ -37,6 +37,14 @@ const (
 	// the HTTP server write timeout.
 	maxGetQueryResultsTimeout = 2 * time.Minute
 
+	// insertWriteJobWait is how long jobs.insert waits for a state-MUTATING
+	// job before answering with a non-terminal state: long enough that any
+	// realistic DDL/DML completes inside it (so its side effects are
+	// visible to a client that does not poll, matching the pre-async
+	// synchronous behaviour), while staying under the HTTP server's 5m
+	// write timeout.
+	insertWriteJobWait = 4 * time.Minute
+
 	// completedJobRingSize bounds how many completed jobs stay in the live
 	// registry (with their in-memory responses); older ones are served from
 	// the metadata store.
@@ -184,6 +192,14 @@ func (s *Server) runQueryJob(job *metadata.Job) {
 				content.Configuration.Query.DestinationTable = queryStats.DdlTargetTable
 			}
 		})
+		if !readOnly {
+			// The job may have created or dropped datasets, tables or views
+			// (DDL, CTAS, destination tables, schema sync). Invalidate the
+			// metadata read cache BEFORE Complete wakes the long-poll
+			// waiters, so a client that observes the job DONE reads
+			// post-write metadata.
+			s.metaCache.invalidate()
+		}
 		if err := s.persistJobResult(ctx, job, response, jobErr); err != nil {
 			s.logger.Error(fmt.Sprintf("failed to persist result of job %s: %v", job.ID, err))
 		}
@@ -485,5 +501,11 @@ func (s *Server) materializeAnonResultTable(ctx context.Context, projectID, data
 	if err := s.contentRepo.AddTableData(ctx, tx, projectID, datasetID, tableDef); err != nil {
 		return fmt.Errorf("failed to add table data: %w", err)
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// The anonymous dataset/table just became visible; readers must not be
+	// served a pre-materialization hydration.
+	s.metaCache.invalidate()
+	return nil
 }
