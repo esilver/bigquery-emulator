@@ -2278,16 +2278,38 @@ type jobsQueryRequest struct {
 }
 
 func (h *jobsQueryHandler) Handle(ctx context.Context, r *jobsQueryRequest) (*internaltypes.QueryResponse, error) {
+	// Statement watchdog (issue #14): the synchronous jobs.query path runs
+	// the same budget as async jobs — without it a runaway statement here
+	// holds the engine unbounded (the async path is wrapped in job_async.go).
+	if budget := resolveMaxStatementDuration(); budget > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeoutCause(ctx, budget,
+			fmt.Errorf("statement exceeded the %s watchdog budget (%s)", budget, maxStatementDurationEnvName))
+		defer cancel()
+	}
 	var datasetID string
 	if r.queryRequest.DefaultDataset != nil {
 		datasetID = r.queryRequest.DefaultDataset.DatasetId
 	}
-	conn, err := r.server.connMgr.Connection(ctx, r.project.ID, datasetID)
-	if err != nil {
-		return nil, err
-	}
-	tx, err := conn.Begin(ctx)
-	if err != nil {
+	// A connection killed by a prior watchdog/interrupt surfaces here as
+	// driver.ErrBadConn on its FIRST use (conn-pinned calls bypass
+	// database/sql's retry) — acquire-and-begin retries once on a fresh
+	// conn; the statement has not reached the engine yet, so this is safe.
+	var conn *connection.Conn
+	var tx *connection.Tx
+	for attempt := 0; ; attempt++ {
+		var err error
+		conn, err = r.server.connMgr.Connection(ctx, r.project.ID, datasetID)
+		if err != nil {
+			return nil, err
+		}
+		tx, err = conn.Begin(ctx)
+		if err == nil {
+			break
+		}
+		if attempt == 0 && strings.Contains(err.Error(), "bad connection") {
+			continue
+		}
 		return nil, err
 	}
 	defer tx.RollbackIfNotCommitted()
@@ -2306,6 +2328,12 @@ func (h *jobsQueryHandler) Handle(ctx context.Context, r *jobsQueryRequest) (*in
 		)
 	}
 	if queryErr != nil {
+		// Attribute watchdog-budget expiries explicitly: WithTimeoutCause's
+		// cause is not part of the driver error chain, but clients (and the
+		// watchdog test) should see WHY the statement died.
+		if cause := context.Cause(ctx); cause != nil && strings.Contains(cause.Error(), "watchdog") {
+			queryErr = fmt.Errorf("%v: %w", cause, queryErr)
+		}
 		return nil, queryErr
 	}
 	endTime := time.Now()
