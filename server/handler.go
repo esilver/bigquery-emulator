@@ -2321,6 +2321,19 @@ func (h *jobsQueryHandler) Handle(ctx context.Context, r *jobsQueryRequest) (*in
 	if r.queryRequest.DefaultDataset != nil {
 		datasetID = r.queryRequest.DefaultDataset.DatasetId
 	}
+	// Serialization scoped to MUTATING statements (issue #12 architecture;
+	// the route bypasses sequentialAccessMiddleware): a plain SELECT runs
+	// outside seqMu, so a cancellation-storm client cannot saturate the
+	// global writer lock with doomed reads (issue #18 follow-up), while
+	// DML/DDL/scripts keep exactly the serialization the middleware used
+	// to provide.
+	if stmtType := statementTypeForQuery(r.queryRequest.Query, nil); stmtType != "SELECT" {
+		r.server.seqMu.Lock()
+		defer func() {
+			r.server.metaCache.invalidate()
+			r.server.seqMu.Unlock()
+		}()
+	}
 	// A connection killed by a prior watchdog/interrupt surfaces here as
 	// driver.ErrBadConn on its FIRST use (conn-pinned calls bypass
 	// database/sql's retry) — acquire-and-begin retries once on a fresh

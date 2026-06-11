@@ -89,6 +89,16 @@ func asyncJobRoute(r *http.Request) bool {
 		return true // jobs.get
 	case r.Method == http.MethodGet && template == "/projects/{projectId}/queries/{jobId}":
 		return true // jobs.getQueryResults
+	case r.Method == http.MethodPost && template == "/projects/{projectId}/queries":
+		// jobs.query: serialization moved into the handler, scoped to
+		// MUTATING statements (the issue #12 architecture). Holding seqMu
+		// for every synchronous query meant one client in a tight
+		// timeout-retry loop owned the global writer lock for each doomed
+		// SELECT's full lifetime — at storm rates the lock saturates and
+		// every writer's queue wait grows without bound (issue #18
+		// follow-up: workers starved at half pace while no single hold
+		// exceeded 200ms).
+		return true
 	}
 	return false
 }
