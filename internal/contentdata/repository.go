@@ -3,6 +3,7 @@ package contentdata
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -537,8 +538,14 @@ func (r *Repository) convertValueToCell(value interface{}, schema *bigqueryv2.Ta
 		return &internaltypes.TableCell{V: internaltypes.TableRow{F: cells}, Bytes: totalBytes}, nil
 	}
 
-	// Scalar. Render via fmt.Sprint — matches the legacy behaviour
-	// for non-RECORD, non-REPEATED columns.
+	// Scalar. BYTES arrive from the driver as raw payload []byte since
+	// googlesqlite v0.2.19 (native BLOB storage); the BigQuery v2 API
+	// contract is base64 text. Everything else renders via fmt.Sprint —
+	// matches the legacy behaviour for non-RECORD, non-REPEATED columns.
+	if b, ok := value.([]byte); ok {
+		v := base64.StdEncoding.EncodeToString(b)
+		return &internaltypes.TableCell{V: v, Bytes: int64(len(v))}, nil
+	}
 	v := fmt.Sprint(value)
 	return &internaltypes.TableCell{V: v, Bytes: int64(len(v))}, nil
 }
