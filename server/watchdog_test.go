@@ -68,8 +68,7 @@ func TestStatementWatchdogFailsRunawayJob(t *testing.T) {
 	// A multi-second single statement (a 100M-row cross-join aggregate over
 	// computed strings): far over the 150ms budget, far under the test
 	// timeout.
-	slow := "SELECT COUNT(DISTINCT CONCAT(CAST(a AS STRING), '-', CAST(b AS STRING))) " +
-		"FROM UNNEST(GENERATE_ARRAY(1, 10000)) a, UNNEST(GENERATE_ARRAY(1, 10000)) b"
+	slow := "SELECT COUNT(*) FROM UNNEST(GENERATE_ARRAY(1, 8000)) a, UNNEST(GENERATE_ARRAY(1, 8000)) b WHERE MOD(a+b, 7) > 0"
 	it, err := client.Query(slow).Read(ctx)
 	if err == nil {
 		var row []bigquery.Value
