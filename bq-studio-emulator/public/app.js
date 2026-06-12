@@ -718,17 +718,19 @@ function renderBenchmark(result) {
     ${result.results.map(item => `
       <section class="benchmark-block">
         <h3>${escapeHtml(item.name)}</h3>
-        <table class="data-grid">
-          <thead><tr><th>avg</th><th>min</th><th>p50</th><th>p95</th><th>max</th><th>runs</th></tr></thead>
-          <tbody><tr>
-            <td>${item.stats.avgMs} ms</td>
-            <td>${item.stats.minMs} ms</td>
-            <td>${item.stats.p50Ms} ms</td>
-            <td>${item.stats.p95Ms} ms</td>
-            <td>${item.stats.maxMs} ms</td>
-            <td>${item.stats.runs}</td>
-          </tr></tbody>
-        </table>
+        ${item.stats ? `
+          <table class="data-grid">
+            <thead><tr><th>avg</th><th>min</th><th>p50</th><th>p95</th><th>max</th><th>runs</th></tr></thead>
+            <tbody><tr>
+              <td>${item.stats.avgMs} ms</td>
+              <td>${item.stats.minMs} ms</td>
+              <td>${item.stats.p50Ms} ms</td>
+              <td>${item.stats.p95Ms} ms</td>
+              <td>${item.stats.maxMs} ms</td>
+              <td>${item.stats.runs}</td>
+            </tr></tbody>
+          </table>
+        ` : `<div class="error-box">${escapeHtml(item.error || "Benchmark query failed.")}</div>`}
       </section>
     `).join("")}
   `;

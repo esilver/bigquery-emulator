@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "check": "node --check server.js && node --check public/app.js && node --check scripts/seed-sqlite-storage.mjs",
     "seed:sqlite": "node scripts/seed-sqlite-storage.mjs"
   },
   "engines": {
