@@ -13,13 +13,15 @@ const TARGETS = [
     id: "duckdb",
     label: "DuckDB",
     emulatorUrl: (process.env.BQ_DUCKDB_EMULATOR_URL || process.env.BQ_EMULATOR_URL || "http://localhost:9050").replace(/\/$/, ""),
-    projectId: process.env.BQ_DUCKDB_PROJECT_ID || PROJECT_ID
+    projectId: process.env.BQ_DUCKDB_PROJECT_ID || PROJECT_ID,
+    cancelMode: "interrupt"
   },
   {
     id: "sqlite",
     label: "SQLite",
     emulatorUrl: (process.env.BQ_SQLITE_EMULATOR_URL || "http://localhost:9051").replace(/\/$/, ""),
-    projectId: process.env.BQ_SQLITE_PROJECT_ID || PROJECT_ID
+    projectId: process.env.BQ_SQLITE_PROJECT_ID || PROJECT_ID,
+    cancelMode: "detach"
   }
 ];
 const TARGET_BY_ID = new Map(TARGETS.map(target => [target.id, target]));
@@ -95,7 +97,8 @@ async function emulatorFetch(route, options = {}) {
   return body || {};
 }
 
-function requestAbortSignal(req, res) {
+function requestAbortSignal(req, res, target) {
+  if (target.cancelMode !== "interrupt") return undefined;
   const controller = new AbortController();
   const abort = () => {
     if (!res.writableEnded) controller.abort();
@@ -103,6 +106,10 @@ function requestAbortSignal(req, res) {
   req.on("aborted", abort);
   res.on("close", abort);
   return controller.signal;
+}
+
+function responseClosed(res) {
+  return res.writableEnded || res.destroyed;
 }
 
 function targetById(id) {
@@ -468,7 +475,8 @@ async function handleApi(req, res, url) {
         id: target.id,
         label: target.label,
         emulatorUrl: target.emulatorUrl,
-        projectId: target.projectId
+        projectId: target.projectId,
+        cancelMode: target.cancelMode
       }))
     });
   }
@@ -516,14 +524,16 @@ async function handleApi(req, res, url) {
     const dataset = safeResourceIdentifier(decodeURIComponent(previewMatch[1]), "dataset");
     const table = safeResourceIdentifier(decodeURIComponent(previewMatch[2]), "table");
     const limit = Math.max(1, Math.min(Number(url.searchParams.get("limit") || 100), 1000));
-    const result = await runQuery(target, `SELECT * FROM ${tableRef(target, dataset, table)} LIMIT ${limit}`, { signal: requestAbortSignal(req, res) });
+    const result = await runQuery(target, `SELECT * FROM ${tableRef(target, dataset, table)} LIMIT ${limit}`, { signal: requestAbortSignal(req, res, target) });
+    if (responseClosed(res)) return;
     return sendJson(res, 200, result);
   }
 
   if (req.method === "POST" && url.pathname === "/api/query") {
     const body = await readJson(req);
     if (!body.query?.trim()) return sendError(res, 400, "Query is required");
-    const result = await runQuery(target, body.query, { useQueryCache: body.useQueryCache, signal: requestAbortSignal(req, res) });
+    const result = await runQuery(target, body.query, { useQueryCache: body.useQueryCache, signal: requestAbortSignal(req, res, target) });
+    if (responseClosed(res)) return;
     return sendJson(res, 200, result);
   }
 
@@ -572,12 +582,12 @@ const server = http.createServer(async (req, res) => {
     }
   } catch (error) {
     if (error.name === "AbortError") {
-      if (!res.writableEnded && !res.destroyed) {
+      if (!responseClosed(res)) {
         sendError(res, 499, "Request canceled");
       }
       return;
     }
-    if (res.writableEnded || res.destroyed) return;
+    if (responseClosed(res)) return;
     const status = error.statusCode || 500;
     sendError(res, status, error.message || "Internal server error", error.details);
   }

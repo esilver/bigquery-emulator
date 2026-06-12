@@ -80,6 +80,10 @@ function renderTargetSelect() {
   refs.targetSelect.value = state.activeTarget;
 }
 
+function activeTargetConfig() {
+  return state.targets.find(target => target.id === state.activeTarget) || null;
+}
+
 function resetExplorerState() {
   state.health = null;
   state.datasets = [];
@@ -168,13 +172,16 @@ function startQueryProgress(startedAt) {
 }
 
 function showCancelButton() {
+  const target = activeTargetConfig();
   refs.cancelQueryBtn.classList.remove("hidden");
   refs.cancelQueryBtn.disabled = false;
   refs.cancelQueryBtn.textContent = "Cancel";
+  refs.cancelQueryBtn.title = target?.cancelMode === "detach" ? "Detach from running query" : "Cancel running query";
   return () => {
     refs.cancelQueryBtn.classList.add("hidden");
     refs.cancelQueryBtn.disabled = false;
     refs.cancelQueryBtn.textContent = "Cancel";
+    refs.cancelQueryBtn.title = "Cancel running query";
   };
 }
 
@@ -352,7 +359,8 @@ async function runQuery(query = refs.sqlEditor.value, source = "manual") {
   const restore = setBusy(el("runBtn"), "Running");
   const hideCancel = showCancelButton();
   const startedAt = Date.now();
-  state.activeQuery = { controller, startedAt, cancelRequested: false };
+  const cancelMode = activeTargetConfig()?.cancelMode || "interrupt";
+  state.activeQuery = { controller, startedAt, cancelRequested: false, cancelMode };
   setResultsPlaceholder("Running query...", "Running query...", "loading-state");
   const progressTimer = startQueryProgress(startedAt);
   try {
@@ -374,9 +382,12 @@ async function runQuery(query = refs.sqlEditor.value, source = "manual") {
   } catch (error) {
     const durationMs = Date.now() - startedAt;
     if (isAbortError(error)) {
+      const detached = cancelMode === "detach";
       setResultsPlaceholder(
-        `Canceled · ${formatDuration(durationMs)}`,
-        "Query request canceled. Backends that honor request cancellation interrupt the running statement.",
+        `${detached ? "Detached" : "Canceled"} · ${formatDuration(durationMs)}`,
+        detached
+          ? "UI request detached. SQLite keeps running the statement in the emulator so its connection stays usable."
+          : "Query request canceled. Backends that honor request cancellation interrupt the running statement.",
         "canceled-state"
       );
     } else {
@@ -388,6 +399,7 @@ async function runQuery(query = refs.sqlEditor.value, source = "manual") {
       source,
       ok: false,
       canceled: isAbortError(error),
+      detached: isAbortError(error) && cancelMode === "detach",
       durationMs,
       error: error.message
     });
@@ -689,7 +701,7 @@ function renderHistory() {
   refs.historyList.innerHTML = state.history.map(item => `
     <article class="history-item">
       <div class="history-meta">
-        <span>${item.ok ? "OK" : item.canceled ? "Canceled" : "Failed"} · ${Math.round(item.durationMs || 0)} ms · ${escapeHtml(item.source || "query")}</span>
+        <span>${item.ok ? "OK" : item.detached ? "Detached" : item.canceled ? "Canceled" : "Failed"} · ${Math.round(item.durationMs || 0)} ms · ${escapeHtml(item.source || "query")}</span>
         <span>${new Date(item.createdAt).toLocaleString()}</span>
       </div>
       <pre class="history-sql">${escapeHtml(item.query || item.error || "")}</pre>
