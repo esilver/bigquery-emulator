@@ -63,7 +63,7 @@ require (
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.37.0 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.3.3 // indirect
-	github.com/esilver/duckdb-go-pure v0.3.9 // indirect
+	github.com/esilver/duckdb-go-pure v0.3.10 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
@@ -149,6 +149,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/goccy/googlesqlite => github.com/esilver/googlesqlite v0.0.0-20260612210746-e1d3df68ae64
+replace github.com/goccy/googlesqlite => github.com/esilver/googlesqlite v0.0.0-20260612213132-b3ea7ea16311
 
 replace github.com/goccy/go-googlesql => github.com/esilver/go-googlesql v0.2.4-finalizer.1.0.20260611225755-3bdff21371a3

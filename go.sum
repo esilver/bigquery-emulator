@@ -117,12 +117,12 @@ github.com/envoyproxy/go-control-plane/ratelimit v0.1.0/go.mod h1:Wk+tMFAFbCXaJP
 github.com/envoyproxy/protoc-gen-validate v0.1.0/go.mod h1:iSmxcyjqTsJpI2R4NaDN7+kN2VEUnK/pcBlmesArF7c=
 github.com/envoyproxy/protoc-gen-validate v1.3.3 h1:MVQghNeW+LZcmXe7SY1V36Z+WFMDjpqGAGacLe2T0ds=
 github.com/envoyproxy/protoc-gen-validate v1.3.3/go.mod h1:TsndJ/ngyIdQRhMcVVGDDHINPLWB7C82oDArY51KfB0=
-github.com/esilver/duckdb-go-pure v0.3.9 h1:W/Kur1v/yeG5AuY/DF4LJLl1rCkFOlq9JXKXiRICd20=
-github.com/esilver/duckdb-go-pure v0.3.9/go.mod h1:ArM/CohRgBCoOLcKcDJjMuFoWvFHIL7FYNzI5aJs5VI=
+github.com/esilver/duckdb-go-pure v0.3.10 h1:Zi4Ca9qkIsK6X8MuyN6FgUsvl26N67jDpKTDzOdJbzg=
+github.com/esilver/duckdb-go-pure v0.3.10/go.mod h1:ArM/CohRgBCoOLcKcDJjMuFoWvFHIL7FYNzI5aJs5VI=
 github.com/esilver/go-googlesql v0.2.4-finalizer.1.0.20260611225755-3bdff21371a3 h1:Tm09ZeN8KjwfBCt1myLlszltewYuGLff66rrfY0rBB4=
 github.com/esilver/go-googlesql v0.2.4-finalizer.1.0.20260611225755-3bdff21371a3/go.mod h1:0CUrO9fG9A5lAxOQDjCUr7ibzoRLiv2iaAwbGvESAhM=
-github.com/esilver/googlesqlite v0.0.0-20260612210746-e1d3df68ae64 h1:Vk91BTiZLxHT+LBYjHomidJcm78dCFv+Jo3j0FA+XSg=
-github.com/esilver/googlesqlite v0.0.0-20260612210746-e1d3df68ae64/go.mod h1:Z3n7UlGm0jEQKIVNBJMNycVkecEoRUikf2ajIdeyrIY=
+github.com/esilver/googlesqlite v0.0.0-20260612213132-b3ea7ea16311 h1:GQP0Vscjq0lqRbGlCJEzJyNcrxV5nDJgGAQv2bU3BzI=
+github.com/esilver/googlesqlite v0.0.0-20260612213132-b3ea7ea16311/go.mod h1:XGxzISJFyVRtUTLMSP5feMqY0kiQtbxK2s7atYvkNBw=
 github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2Wg=
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/fsouza/fake-gcs-server v1.54.0 h1:DGO4EkFVbtP/A5Ha+CAHHx+Xa6O6LeskMB4hQ1wBE48=
