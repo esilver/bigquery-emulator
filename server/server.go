@@ -97,7 +97,7 @@ func New(storage Storage) (*Server, error) {
 	}
 	server.jobsCtx, server.jobsCancel = context.WithCancel(context.Background())
 	server.maxStmtDuration = resolveMaxStatementDuration()
-	if storage == TempStorage {
+	if query, ok := tempStorageQuery(storage); ok {
 		f, err := os.CreateTemp("", "")
 		if err != nil {
 			return nil, fmt.Errorf("failed to create temporary file: %w", err)
@@ -111,7 +111,7 @@ func New(storage Storage) (*Server, error) {
 		if err := os.Remove(f.Name()); err != nil {
 			return nil, fmt.Errorf("failed to remove temporary file: %w", err)
 		}
-		storage = Storage(fmt.Sprintf("file:%s?cache=shared", f.Name()))
+		storage = appendStorageQuery(Storage(fmt.Sprintf("file:%s?cache=shared", f.Name())), query)
 		server.storage = storage
 		server.fileCleanup = func() error {
 			err := os.Remove(f.Name())
