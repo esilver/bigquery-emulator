@@ -107,6 +107,7 @@ ENV PYTHONPATH=/deps/python \
     PROJECT_ID=test \
     CASES_FILE=/app/cases.json \
     REPORT_FILE=/work/report.json \
+    CLOUDSDK_PYTHON=/usr/bin/python3 \
     CLOUDSDK_AUTH_ACCESS_TOKEN=emulator \
     CLOUDSDK_CORE_DISABLE_PROMPTS=1
 
