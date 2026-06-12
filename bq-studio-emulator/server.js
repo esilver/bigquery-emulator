@@ -295,6 +295,82 @@ function splitCsvLine(line) {
   return values;
 }
 
+function splitCsvRecords(csvBuffer) {
+  const text = csvBuffer.toString("utf8").replace(/^\uFEFF/, "");
+  const records = [];
+  let start = 0;
+  let quoted = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const next = text[i + 1];
+    if (char === '"' && quoted && next === '"') {
+      i += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+      const record = text.slice(start, i);
+      if (record.trim().length > 0) records.push(record);
+      if (char === "\r" && next === "\n") i += 1;
+      start = i + 1;
+    }
+  }
+
+  const tail = text.slice(start);
+  if (tail.trim().length > 0) records.push(tail);
+  return records;
+}
+
+function isCsvFooterRecord(record) {
+  const firstCell = (splitCsvLine(record)[0] || "").trim().toLowerCase();
+  return firstCell === "grand total" || firstCell === "grand total:";
+}
+
+function prepareCsvUpload(csvBuffer, skipLeadingRows) {
+  if (!skipLeadingRows) return { data: csvBuffer, skipLeadingRows: 0, trimmedFooterRows: 0 };
+  const records = splitCsvRecords(csvBuffer).slice(skipLeadingRows - 1);
+  let trimmedFooterRows = 0;
+  while (records.length && isCsvFooterRecord(records[records.length - 1])) {
+    records.pop();
+    trimmedFooterRows += 1;
+  }
+  return {
+    data: Buffer.from(records.length ? `${records.join("\n")}\n` : "", "utf8"),
+    skipLeadingRows: 1,
+    trimmedFooterRows
+  };
+}
+
+function cleanCsvFieldName(header, index) {
+  const cleaned = header.trim().replace(/[^A-Za-z0-9_]/g, "_").replace(/^_+|_+$/g, "");
+  return cleaned || `field_${index + 1}`;
+}
+
+function uniqueCsvFieldNames(names) {
+  const seen = new Map();
+  return names.map(name => {
+    const count = seen.get(name) || 0;
+    seen.set(name, count + 1);
+    return count ? `${name}_${count + 1}` : name;
+  });
+}
+
+function pickCsvHeaderIndex(lines, skipLeadingRows) {
+  if (!skipLeadingRows) return 0;
+  const requestedIndex = Math.max(0, Math.min(lines.length - 1, skipLeadingRows - 1));
+  const requestedWidth = splitCsvLine(lines[requestedIndex]).length;
+  const candidates = lines.slice(0, Math.min(lines.length, 25)).map((line, index) => ({
+    index,
+    width: splitCsvLine(line).length
+  }));
+  const widest = candidates.reduce((best, candidate) => (
+    candidate.width > best.width ? candidate : best
+  ), { index: requestedIndex, width: requestedWidth });
+
+  if (requestedWidth <= 2 && widest.width > requestedWidth) return widest.index;
+  return requestedIndex;
+}
+
 function inferBigQueryType(values) {
   const nonEmpty = values.filter(value => value !== "");
   if (!nonEmpty.length) return "STRING";
@@ -307,24 +383,32 @@ function inferBigQueryType(values) {
 }
 
 function inferSchema(csvBuffer, skipLeadingRows) {
-  const lines = csvBuffer.toString("utf8").split(/\r?\n/).filter(Boolean);
+  const lines = splitCsvRecords(csvBuffer);
   if (!lines.length) {
     const err = new Error("CSV file is empty");
     err.statusCode = 400;
     throw err;
   }
-  const headers = splitCsvLine(lines[0]).map((header, index) => {
-    const cleaned = header.trim().replace(/[^A-Za-z0-9_]/g, "_").replace(/^_+|_+$/g, "");
-    return cleaned || `field_${index + 1}`;
-  });
-  const sampleLines = lines.slice(skipLeadingRows || 1, Math.min(lines.length, (skipLeadingRows || 1) + 100));
+  const effectiveSkipLeadingRows = Math.max(0, Number(skipLeadingRows) || 0);
+  const headerIndex = pickCsvHeaderIndex(lines, effectiveSkipLeadingRows);
+  const headerValues = splitCsvLine(lines[headerIndex]);
+  const headers = uniqueCsvFieldNames(
+    effectiveSkipLeadingRows
+      ? headerValues.map(cleanCsvFieldName)
+      : headerValues.map((_, index) => `field_${index + 1}`)
+  );
+  const sampleStart = effectiveSkipLeadingRows ? headerIndex + 1 : 0;
+  const sampleLines = lines.slice(sampleStart, sampleStart + 100);
   const columns = headers.map(() => []);
   for (const line of sampleLines) {
     const values = splitCsvLine(line);
     headers.forEach((_, index) => columns[index].push(values[index] || ""));
   }
   return {
-    fields: headers.map((name, index) => ({ name, type: inferBigQueryType(columns[index]) }))
+    schema: {
+      fields: headers.map((name, index) => ({ name, type: inferBigQueryType(columns[index]) }))
+    },
+    skipLeadingRows: effectiveSkipLeadingRows ? headerIndex + 1 : 0
   };
 }
 
@@ -338,10 +422,19 @@ async function handleCsvLoad(req, res, target) {
   const dataset = safeIdentifier((parts.dataset?.value || "").trim(), "dataset");
   const table = safeIdentifier((parts.table?.value || "").trim(), "table");
   const writeDisposition = (parts.writeDisposition?.value || "WRITE_TRUNCATE").trim();
-  const skipLeadingRows = Number(parts.skipLeadingRows?.value || 1);
-  const schema = parts.schemaJson?.value
-    ? JSON.parse(parts.schemaJson.value)
-    : inferSchema(file.data, skipLeadingRows);
+  let skipLeadingRows = Number(parts.skipLeadingRows?.value || 1);
+  let schema;
+  if (parts.schemaJson?.value) {
+    schema = JSON.parse(parts.schemaJson.value);
+  } else {
+    const inferred = inferSchema(file.data, skipLeadingRows);
+    schema = inferred.schema;
+    skipLeadingRows = inferred.skipLeadingRows;
+  }
+
+  const upload = prepareCsvUpload(file.data, skipLeadingRows);
+  const uploadCsv = upload.data;
+  const uploadSkipLeadingRows = upload.skipLeadingRows;
 
   const metadata = {
     configuration: {
@@ -349,7 +442,7 @@ async function handleCsvLoad(req, res, target) {
         destinationTable: { projectId: target.projectId, datasetId: dataset, tableId: table },
         schema,
         sourceFormat: "CSV",
-        skipLeadingRows,
+        skipLeadingRows: uploadSkipLeadingRows,
         writeDisposition
       }
     }
@@ -359,7 +452,7 @@ async function handleCsvLoad(req, res, target) {
   const multipartBody = Buffer.concat([
     Buffer.from(`--${boundary}\r\ncontent-type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`, "utf8"),
     Buffer.from(`--${boundary}\r\ncontent-type: text/csv\r\n\r\n`, "utf8"),
-    file.data,
+    uploadCsv,
     Buffer.from(`\r\n--${boundary}--\r\n`, "utf8")
   ]);
 
@@ -376,6 +469,9 @@ async function handleCsvLoad(req, res, target) {
     durationMs,
     destination: `${target.projectId}:${dataset}.${table}`,
     schema,
+    skipLeadingRows,
+    uploadedSkipLeadingRows: uploadSkipLeadingRows,
+    trimmedFooterRows: upload.trimmedFooterRows,
     jobId: result.jobReference?.jobId,
     raw: result
   });
