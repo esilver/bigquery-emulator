@@ -1984,9 +1984,14 @@ func (h *jobsQueryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var rawReq struct {
 		QueryParameters []json.RawMessage `json:"queryParameters"`
+		MaxResults      *json.RawMessage  `json:"maxResults"`
 	}
 	if err := json.Unmarshal(body, &rawReq); err == nil {
 		applyNullQueryParameters(rawReq.QueryParameters, req.QueryParameters)
+	}
+	if req.MaxResults < 0 {
+		errorResponse(ctx, w, errInvalid("maxResults must be non-negative"))
+		return
 	}
 	useInt64Timestamp := false
 	if options := req.FormatOptions; options != nil {
@@ -1998,6 +2003,8 @@ func (h *jobsQueryHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		project:           project,
 		queryRequest:      &req,
 		useInt64Timestamp: useInt64Timestamp,
+		maxResults:        uint64(req.MaxResults),
+		hasMaxResults:     rawReq.MaxResults != nil,
 	})
 	if err != nil {
 		errorResponse(ctx, w, errJobInternalError(err.Error()))
@@ -2011,6 +2018,8 @@ type jobsQueryRequest struct {
 	project           *metadata.Project
 	queryRequest      *bigqueryv2.QueryRequest
 	useInt64Timestamp bool
+	maxResults        uint64
+	hasMaxResults     bool
 }
 
 func (h *jobsQueryHandler) Handle(ctx context.Context, r *jobsQueryRequest) (*internaltypes.QueryResponse, error) {
@@ -2126,9 +2135,23 @@ func (h *jobsQueryHandler) Handle(ctx context.Context, r *jobsQueryRequest) (*in
 			}
 		}
 	}
-	response.Rows = internaltypes.Format(response.Schema, response.Rows, r.useInt64Timestamp)
-	response.JobReference = job.JobReference
-	return response, nil
+	formattedRows := internaltypes.Format(response.Schema, response.Rows, r.useInt64Timestamp)
+	pageToken := ""
+	if r.hasMaxResults {
+		end := r.maxResults
+		if end > uint64(len(formattedRows)) {
+			end = uint64(len(formattedRows))
+		}
+		if end < uint64(len(formattedRows)) {
+			pageToken = strconv.FormatUint(end, 10)
+		}
+		formattedRows = formattedRows[:int(end)]
+	}
+	returnResponse := *response
+	returnResponse.Rows = formattedRows
+	returnResponse.PageToken = pageToken
+	returnResponse.JobReference = job.JobReference
+	return &returnResponse, nil
 }
 
 func (h *modelsDeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
