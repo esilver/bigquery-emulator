@@ -556,19 +556,57 @@ function toggleSqlLineComment(textarea) {
   }
 }
 
-function inferSchemaFromText(text) {
-  const lines = text.split(/\r?\n/).filter(Boolean);
-  if (!lines.length) return { fields: [] };
-  const headers = parseCsvLine(lines[0]).map((header, index) => {
-    const cleaned = header.trim().replace(/[^A-Za-z0-9_]/g, "_").replace(/^_+|_+$/g, "");
-    return cleaned || `field_${index + 1}`;
+function cleanCsvFieldName(header, index) {
+  const cleaned = header.trim().replace(/[^A-Za-z0-9_]/g, "_").replace(/^_+|_+$/g, "");
+  return cleaned || `field_${index + 1}`;
+}
+
+function uniqueCsvFieldNames(names) {
+  const seen = new Map();
+  return names.map(name => {
+    const count = seen.get(name) || 0;
+    seen.set(name, count + 1);
+    return count ? `${name}_${count + 1}` : name;
   });
-  const samples = lines.slice(1, 101).map(parseCsvLine);
+}
+
+function pickCsvHeaderIndex(lines, skipLeadingRows) {
+  if (!skipLeadingRows) return 0;
+  const requestedIndex = Math.max(0, Math.min(lines.length - 1, skipLeadingRows - 1));
+  const requestedWidth = parseCsvLine(lines[requestedIndex]).length;
+  const candidates = lines.slice(0, Math.min(lines.length, 25)).map((line, index) => ({
+    index,
+    width: parseCsvLine(line).length
+  }));
+  const widest = candidates.reduce((best, candidate) => (
+    candidate.width > best.width ? candidate : best
+  ), { index: requestedIndex, width: requestedWidth });
+
+  if (requestedWidth <= 2 && widest.width > requestedWidth) return widest.index;
+  return requestedIndex;
+}
+
+function inferSchemaFromText(text, requestedSkipLeadingRows = 1) {
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter(line => line.trim().length > 0);
+  if (!lines.length) return { schema: { fields: [] }, skipLeadingRows: 0 };
+  const skipLeadingRows = Math.max(0, Number(requestedSkipLeadingRows) || 0);
+  const headerIndex = pickCsvHeaderIndex(lines, skipLeadingRows);
+  const headerValues = parseCsvLine(lines[headerIndex]);
+  const headers = uniqueCsvFieldNames(
+    skipLeadingRows
+      ? headerValues.map(cleanCsvFieldName)
+      : headerValues.map((_, index) => `field_${index + 1}`)
+  );
+  const sampleStart = skipLeadingRows ? headerIndex + 1 : 0;
+  const samples = lines.slice(sampleStart, sampleStart + 100).map(parseCsvLine);
   return {
-    fields: headers.map((name, index) => ({
-      name,
-      type: inferType(samples.map(row => row[index] || ""))
-    }))
+    schema: {
+      fields: headers.map((name, index) => ({
+        name,
+        type: inferType(samples.map(row => row[index] || ""))
+      }))
+    },
+    skipLeadingRows: skipLeadingRows ? headerIndex + 1 : 0
   };
 }
 
@@ -610,7 +648,11 @@ async function inferCsvSchema() {
   const file = refs.csvFile.files[0];
   if (!file) return;
   const text = await file.slice(0, 1024 * 256).text();
-  refs.schemaJson.value = JSON.stringify(inferSchemaFromText(text), null, 2);
+  const inferred = inferSchemaFromText(text, refs.csvSkipRows.value);
+  refs.csvSkipRows.value = String(inferred.skipLeadingRows);
+  refs.schemaJson.value = JSON.stringify(inferred.schema, null, 2);
+  refs.loadResult.className = "load-result muted";
+  refs.loadResult.textContent = `Inferred ${inferred.schema.fields.length} fields from CSV record ${inferred.skipLeadingRows || 1}.`;
 }
 
 async function loadCsv(event) {
@@ -633,7 +675,8 @@ async function loadCsv(event) {
     const result = await api("/api/load/csv", { method: "POST", body: form });
     await selectDataset(refs.csvDataset.value.trim());
     await selectTable(refs.csvDataset.value.trim(), refs.csvTable.value.trim());
-    refs.loadResult.textContent = `Loaded ${result.destination}\nJob: ${result.jobId}\nDuration: ${result.durationMs} ms`;
+    const footerNote = result.trimmedFooterRows ? `\nTrimmed footer rows: ${result.trimmedFooterRows}` : "";
+    refs.loadResult.textContent = `Loaded ${result.destination}\nJob: ${result.jobId}\nDuration: ${result.durationMs} ms${footerNote}`;
   } catch (error) {
     refs.loadResult.textContent = `${error.message}\n${error.details ? JSON.stringify(error.details, null, 2) : ""}`;
   } finally {
@@ -762,6 +805,7 @@ function bindEvents() {
   refs.datasetSearch.addEventListener("input", renderDatasets);
   el("inferSchemaBtn").addEventListener("click", inferCsvSchema);
   refs.csvFile.addEventListener("change", inferCsvSchema);
+  refs.csvSkipRows.addEventListener("change", inferCsvSchema);
   el("csvForm").addEventListener("submit", loadCsv);
   el("runBenchmarkBtn").addEventListener("click", runBenchmark);
   el("clearHistoryBtn").addEventListener("click", () => {
