@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +33,8 @@ import (
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 )
+
+var deleteDatasetCascadeDatasetIDCounter atomic.Uint64
 
 func TestSimpleQuery(t *testing.T) {
 	ctx := context.Background()
@@ -3807,7 +3810,8 @@ func TestDeleteDatasetCascadeRequiresDeleteContents(t *testing.T) {
 	}
 	defer client.Close()
 
-	ds := client.Dataset("ds341")
+	datasetID := fmt.Sprintf("ds341_%d", deleteDatasetCascadeDatasetIDCounter.Add(1))
+	ds := client.Dataset(datasetID)
 	if err := ds.Create(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
