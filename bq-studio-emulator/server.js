@@ -120,6 +120,26 @@ function normalizeTable(table, target = targetById(DEFAULT_TARGET_ID)) {
   };
 }
 
+function normalizeDataset(dataset, target = targetById(DEFAULT_TARGET_ID)) {
+  return {
+    id: dataset.datasetReference?.datasetId || dataset.id,
+    projectId: dataset.datasetReference?.projectId || target.projectId,
+    location: dataset.location,
+    raw: dataset
+  };
+}
+
+function isGeneratedArtifactDataset(datasetId) {
+  return /^bqjob_/i.test(datasetId)
+    || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(datasetId);
+}
+
+function visibleDatasets(datasets, target) {
+  return (datasets || [])
+    .map(dataset => normalizeDataset(dataset, target))
+    .filter(dataset => !isGeneratedArtifactDataset(dataset.id));
+}
+
 function normalizeQueryRows(response) {
   const fields = response.schema?.fields || [];
   const rows = (response.rows || []).map(row => {
@@ -447,13 +467,14 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/health") {
     const startedAt = performance.now();
     const datasets = await emulatorFetch(`/bigquery/v2/projects/${encodeURIComponent(target.projectId)}/datasets`, { target });
+    const visible = visibleDatasets(datasets.datasets, target);
     return sendJson(res, 200, {
       ok: true,
       targetId: target.id,
       targetLabel: target.label,
       emulatorUrl: target.emulatorUrl,
       projectId: target.projectId,
-      datasetCount: datasets.datasets?.length || 0,
+      datasetCount: visible.length,
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100
     });
   }
@@ -461,12 +482,7 @@ async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/datasets") {
     const data = await emulatorFetch(`/bigquery/v2/projects/${encodeURIComponent(target.projectId)}/datasets`, { target });
     return sendJson(res, 200, {
-      datasets: (data.datasets || []).map(dataset => ({
-        id: dataset.datasetReference?.datasetId || dataset.id,
-        projectId: dataset.datasetReference?.projectId || target.projectId,
-        location: dataset.location,
-        raw: dataset
-      }))
+      datasets: visibleDatasets(data.datasets, target)
     });
   }
 

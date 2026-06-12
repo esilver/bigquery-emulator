@@ -225,7 +225,8 @@ function renderDatasets() {
 }
 
 function isGeneratedArtifactDataset(datasetId) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(datasetId);
+  return /^bqjob_/i.test(datasetId)
+    || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(datasetId);
 }
 
 async function toggleDataset(datasetId) {
