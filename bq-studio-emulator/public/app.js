@@ -9,6 +9,7 @@ const state = {
   selectedTable: null,
   selectedSchema: null,
   activeQuery: null,
+  loadGeneration: 0,
   history: JSON.parse(localStorage.getItem("bqStudioHistory") || "[]")
 };
 
@@ -82,6 +83,10 @@ function renderTargetSelect() {
 
 function activeTargetConfig() {
   return state.targets.find(target => target.id === state.activeTarget) || null;
+}
+
+function isStaleLoad(generation) {
+  return generation !== state.loadGeneration;
 }
 
 function resetExplorerState() {
@@ -200,22 +205,27 @@ function isAbortError(error) {
   return error?.name === "AbortError";
 }
 
-async function loadHealth() {
+async function loadHealth(generation) {
   try {
     const health = await api("/api/health");
+    if (isStaleLoad(generation)) return false;
     state.health = health;
     refs.connectionText.textContent = `${health.targetLabel || state.activeTarget}: ${health.projectId} at ${health.emulatorUrl}`;
     setStatus("ok", "Connected");
   } catch (error) {
+    if (isStaleLoad(generation)) return false;
     refs.connectionText.textContent = "Connection unavailable";
     setStatus("error", "Offline");
   }
+  return true;
 }
 
-async function loadDatasets() {
+async function loadDatasets(generation) {
   const data = await api("/api/datasets");
+  if (isStaleLoad(generation)) return false;
   state.datasets = data.datasets || [];
   renderDatasets();
+  return true;
 }
 
 function renderDatasets() {
@@ -291,7 +301,8 @@ async function toggleDataset(datasetId) {
   await selectDataset(datasetId);
 }
 
-async function selectDataset(datasetId) {
+async function selectDataset(datasetId, generation = state.loadGeneration) {
+  if (isStaleLoad(generation)) return false;
   state.selectedDataset = datasetId;
   state.expandedDataset = datasetId;
   state.selectedTable = null;
@@ -300,16 +311,20 @@ async function selectDataset(datasetId) {
   renderDatasets();
   try {
     const data = await api(`/api/tables?dataset=${encodeURIComponent(datasetId)}`);
+    if (isStaleLoad(generation)) return false;
     state.tablesByDataset.set(datasetId, data.tables || []);
     renderDatasets();
   } catch (error) {
+    if (isStaleLoad(generation)) return false;
     state.tablesByDataset.set(datasetId, []);
     renderDatasets();
     showError(error.message, error.details);
   }
+  return true;
 }
 
-async function selectTable(datasetId, tableId) {
+async function selectTable(datasetId, tableId, generation = state.loadGeneration) {
+  if (isStaleLoad(generation)) return false;
   state.selectedDataset = datasetId;
   state.expandedDataset = datasetId;
   state.selectedTable = tableId;
@@ -324,11 +339,14 @@ LIMIT 100`;
   renderDatasets();
   try {
     const schema = await api(`/api/tables/${encodeURIComponent(datasetId)}/${encodeURIComponent(tableId)}/schema`);
+    if (isStaleLoad(generation)) return false;
     state.selectedSchema = schema;
     renderTableDetails(schema);
   } catch (error) {
+    if (isStaleLoad(generation)) return false;
     showError(error.message, error.details);
   }
+  return true;
 }
 
 function renderTableDetails(table) {
@@ -819,21 +837,29 @@ function bindEvents() {
 }
 
 async function init() {
+  const generation = state.loadGeneration + 1;
+  state.loadGeneration = generation;
   setStatus("pending", "Checking");
   await loadTargets();
-  await loadHealth();
+  if (isStaleLoad(generation)) return;
+  await loadHealth(generation);
+  if (isStaleLoad(generation)) return;
   try {
-    await loadDatasets();
+    await loadDatasets(generation);
+    if (isStaleLoad(generation)) return;
     const starter = state.datasets.find(dataset => dataset.id === "dbt_test__audit") || state.datasets[0];
     if (starter && !state.selectedDataset) {
-      await selectDataset(starter.id);
+      await selectDataset(starter.id, generation);
+      if (isStaleLoad(generation)) return;
       const tables = state.tablesByDataset.get(starter.id) || [];
       const starterTable = tables.find(table => table.tableId === "events_1m") || tables[0];
-      if (starterTable) await selectTable(starter.id, starterTable.tableId);
+      if (starterTable) await selectTable(starter.id, starterTable.tableId, generation);
     }
   } catch (error) {
+    if (isStaleLoad(generation)) return;
     showError(error.message, error.details);
   }
+  if (isStaleLoad(generation)) return;
   renderHistory();
 }
 
