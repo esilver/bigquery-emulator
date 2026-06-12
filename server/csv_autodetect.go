@@ -118,3 +118,25 @@ func inferCSVSchema(records [][]string) (*bigqueryv2.TableSchema, error) {
 	}
 	return &bigqueryv2.TableSchema{Fields: fields}, nil
 }
+
+func inferCSVSchemaWithoutHeader(records [][]string) (*bigqueryv2.TableSchema, error) {
+	if len(records) == 0 {
+		return nil, fmt.Errorf("cannot autodetect schema: the CSV has no rows")
+	}
+	columnCount := len(records[0])
+	fields := make([]*bigqueryv2.TableFieldSchema, columnCount)
+	for i := 0; i < columnCount; i++ {
+		column := make([]string, 0, len(records))
+		for _, row := range records {
+			if i < len(row) {
+				column = append(column, row[i])
+			}
+		}
+		fields[i] = &bigqueryv2.TableFieldSchema{
+			Name: fmt.Sprintf("string_field_%d", i),
+			Type: inferCSVColumnType(column),
+			Mode: "NULLABLE",
+		}
+	}
+	return &bigqueryv2.TableSchema{Fields: fields}, nil
+}
