@@ -129,6 +129,8 @@ github.com/esilver/googlesqlite v0.0.0-20260612215608-19c8662f7654 h1:L2JzaFXxUG
 github.com/esilver/googlesqlite v0.0.0-20260612215608-19c8662f7654/go.mod h1:DGlJ8yluQsTqttXMUNW/zYyTX4v8DofZCozlH+wi9OI=
 github.com/esilver/googlesqlite v0.0.0-20260612220949-2af6358e1548 h1:efcgC/qfv4lHwEZKgQN88dqwvxFTV+GuU5eUKSiiHSI=
 github.com/esilver/googlesqlite v0.0.0-20260612220949-2af6358e1548/go.mod h1:DGlJ8yluQsTqttXMUNW/zYyTX4v8DofZCozlH+wi9OI=
+github.com/esilver/googlesqlite v0.0.0-20260612221608-f7f518d4bc9f h1:8c9DI9C6aYCn+FgX8tGFjUB3isZzZGhI1rQgDV/ksxw=
+github.com/esilver/googlesqlite v0.0.0-20260612221608-f7f518d4bc9f/go.mod h1:xaOlYcOE3It0ZdtlT8S3g6qrvfwaHe6+vwxq9hyfhcs=
 github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2Wg=
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/fsouza/fake-gcs-server v1.54.0 h1:DGO4EkFVbtP/A5Ha+CAHHx+Xa6O6LeskMB4hQ1wBE48=
