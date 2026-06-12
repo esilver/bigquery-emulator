@@ -1,0 +1,14 @@
+{
+  "name": "bq-studio-emulator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local BigQuery Studio-style workbench for the BigQuery emulator.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "seed:sqlite": "node scripts/seed-sqlite-storage.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
