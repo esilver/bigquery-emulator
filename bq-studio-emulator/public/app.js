@@ -414,7 +414,8 @@ async function runQuery(query = refs.sqlEditor.value, source = "manual") {
 function renderResults(result) {
   const fields = result.fields || [];
   const rows = result.rows || [];
-  refs.resultSummary.textContent = `${formatNumber(rows.length)} shown · ${formatNumber(result.totalRows)} total · ${result.durationMs} ms · ${result.jobId || ""}`;
+  const limited = result.rowLimit && result.totalRows > rows.length ? ` · limited to ${formatNumber(result.rowLimit)}` : "";
+  refs.resultSummary.textContent = `${formatNumber(rows.length)} shown · ${formatNumber(result.totalRows)} total${limited} · ${result.durationMs} ms · ${result.jobId || ""}`;
   refs.queryMeta.textContent = result.jobId ? `Job ${result.jobId}` : "";
 
   if (!fields.length) {

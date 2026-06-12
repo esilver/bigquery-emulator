@@ -8,6 +8,7 @@ const PORT = Number(process.env.PORT || 5177);
 const HOST = process.env.HOST || "127.0.0.1";
 const PROJECT_ID = process.env.BQ_PROJECT_ID || "finance-emulator";
 const DEFAULT_TARGET_ID = process.env.BQ_DEFAULT_TARGET || "duckdb";
+const QUERY_MAX_RESULTS = parsePositiveInteger(process.env.BQ_STUDIO_QUERY_MAX_RESULTS, 1000);
 const TARGETS = [
   {
     id: "duckdb",
@@ -36,6 +37,11 @@ const mimeTypes = {
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon"
 };
+
+function parsePositiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 function sendJson(res, status, body) {
   const payload = JSON.stringify(body, null, 2);
@@ -230,12 +236,13 @@ async function runQuery(target, query, options = {}) {
     body: JSON.stringify({
       query,
       useLegacySql: false,
+      maxResults: QUERY_MAX_RESULTS,
       maximumBytesBilled: "50000000000",
       useQueryCache: Boolean(options.useQueryCache)
     })
   });
   const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
-  return { ...normalizeQueryRows(response), durationMs };
+  return { ...normalizeQueryRows(response), durationMs, rowLimit: QUERY_MAX_RESULTS };
 }
 
 function parseMultipart(buffer, contentType) {

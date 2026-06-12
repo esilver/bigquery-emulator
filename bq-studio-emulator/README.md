@@ -21,6 +21,7 @@ PORT=5177 \
 BQ_DUCKDB_EMULATOR_URL=http://localhost:9050 \
 BQ_SQLITE_EMULATOR_URL=http://localhost:9051 \
 BQ_PROJECT_ID=finance-emulator \
+BQ_STUDIO_QUERY_MAX_RESULTS=1000 \
 npm start
 ```
 

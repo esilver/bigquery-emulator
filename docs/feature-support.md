@@ -71,7 +71,7 @@ REST surface. The tables below list every documented resource and method.
 | `get` | ✅ | |
 | `list` | ✅ | |
 | `insert` | 🟡 | Query, load and extract configurations only — see [section 2](#2-jobs). |
-| `cancel` | ✅ | |
+| `cancel` | 🟡 | Endpoint exists and returns the job, but `Job.Cancel` is currently a no-op; it does not interrupt or roll back running work. |
 | `delete` | ✅ | |
 
 ### 1.5 `models`
