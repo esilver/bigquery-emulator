@@ -178,6 +178,10 @@ func (j *UploadJob) normalize(projectID string) *ServerError {
 func (j *UploadJob) ToJob() *bigqueryv2.Job {
 	load := j.Configuration.Load
 	skipLeadingRows, _ := load.SkipLeadingRows.Int64()
+	var loadForceSendFields []string
+	if load.SkipLeadingRows != "" {
+		loadForceSendFields = append(loadForceSendFields, "SkipLeadingRows")
+	}
 	return &bigqueryv2.Job{
 		JobReference: j.JobReference,
 		Configuration: &bigqueryv2.JobConfiguration{
@@ -213,6 +217,7 @@ func (j *UploadJob) ToJob() *bigqueryv2.Job {
 				TimePartitioning:                   load.TimePartitioning,
 				UseAvroLogicalTypes:                load.UseAvroLogicalTypes,
 				WriteDisposition:                   load.WriteDisposition,
+				ForceSendFields:                    loadForceSendFields,
 			},
 		},
 	}
@@ -444,6 +449,69 @@ func (h *uploadContentHandler) normalizeColumnNameForJSONData(columnMap map[stri
 	}
 }
 
+func csvRecordsForSchemaInference(records [][]string, skipLeadingRows int64) ([][]string, error) {
+	if skipLeadingRows <= 0 {
+		return records, nil
+	}
+	skip := int(skipLeadingRows)
+	if skip > len(records) {
+		return nil, fmt.Errorf("cannot autodetect schema: skipLeadingRows=%d exceeds CSV row count %d", skipLeadingRows, len(records))
+	}
+	out := make([][]string, 0, 1+len(records)-skip)
+	out = append(out, records[skip-1])
+	out = append(out, records[skip:]...)
+	return out, nil
+}
+
+func hasForceSendField(fields []string, field string) bool {
+	for _, f := range fields {
+		if f == field {
+			return true
+		}
+	}
+	return false
+}
+
+func csvDataStartAndHeader(records [][]string, skipLeadingRows int64, skipLeadingRowsSet bool, autodetect bool) (int, []string) {
+	if skipLeadingRows > 0 {
+		skip := int(skipLeadingRows)
+		if skip > len(records) {
+			return len(records), nil
+		}
+		return skip, records[skip-1]
+	}
+	if autodetect && !skipLeadingRowsSet {
+		return 1, records[0]
+	}
+	return 0, nil
+}
+
+func csvColumnsFromHeaderOrSchema(header []string, fields []*bigqueryv2.TableFieldSchema, columnToType map[string]types.Type) []*types.Column {
+	if header != nil {
+		columns := make([]*types.Column, 0, len(header))
+		for _, col := range header {
+			typ, exists := columnToType[col]
+			if !exists {
+				return csvColumnsFromSchema(fields)
+			}
+			columns = append(columns, &types.Column{Name: col, Type: typ})
+		}
+		return columns
+	}
+	return csvColumnsFromSchema(fields)
+}
+
+func csvColumnsFromSchema(fields []*bigqueryv2.TableFieldSchema) []*types.Column {
+	columns := make([]*types.Column, 0, len(fields))
+	for _, field := range fields {
+		columns = append(columns, &types.Column{
+			Name: field.Name,
+			Type: types.Type(field.Type),
+		})
+	}
+	return columns
+}
+
 func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentRequest) error {
 	load := r.job.Content().Configuration.Load
 	tableRef := load.DestinationTable
@@ -463,13 +531,27 @@ func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentReque
 	// before the destination table is created.
 	var csvRecords [][]string
 	if load.SourceFormat == "CSV" {
+		if load.SkipLeadingRows < 0 {
+			return errInvalid("configuration.load.skipLeadingRows must be non-negative")
+		}
 		records, err := csv.NewReader(r.reader).ReadAll()
 		if err != nil {
 			return fmt.Errorf("failed to read csv: %w", err)
 		}
 		csvRecords = records
 		if !tableExisted && load.Schema == nil && load.Autodetect {
-			schema, err := inferCSVSchema(csvRecords)
+			var schema *bigqueryv2.TableSchema
+			var err error
+			if load.SkipLeadingRows == 0 && hasForceSendField(load.ForceSendFields, "SkipLeadingRows") {
+				schema, err = inferCSVSchemaWithoutHeader(csvRecords)
+			} else {
+				var schemaRecords [][]string
+				schemaRecords, err = csvRecordsForSchemaInference(csvRecords, load.SkipLeadingRows)
+				if err != nil {
+					return err
+				}
+				schema, err = inferCSVSchema(schemaRecords)
+			}
 			if err != nil {
 				return err
 			}
@@ -512,31 +594,13 @@ func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentReque
 		if len(records) == 0 {
 			return fmt.Errorf("failed to find csv header")
 		}
-		if len(records) == 1 {
+		skipLeadingRowsSet := hasForceSendField(load.ForceSendFields, "SkipLeadingRows")
+		dataStart, header := csvDataStartAndHeader(records, load.SkipLeadingRows, skipLeadingRowsSet, load.Autodetect)
+		columns = csvColumnsFromHeaderOrSchema(header, tableContent.Schema.Fields, columnToType)
+		if dataStart >= len(records) {
 			return nil
 		}
-		header := records[0]
-		var ignoreHeader bool
-		for _, col := range header {
-			if _, exists := columnToType[col]; !exists {
-				ignoreHeader = true
-				break
-			}
-			columns = append(columns, &types.Column{
-				Name: col,
-				Type: columnToType[col],
-			})
-		}
-		if ignoreHeader {
-			columns = []*types.Column{}
-			for _, field := range tableContent.Schema.Fields {
-				columns = append(columns, &types.Column{
-					Name: field.Name,
-					Type: types.Type(field.Type),
-				})
-			}
-		}
-		for _, record := range records[1:] {
+		for _, record := range records[dataStart:] {
 			rowData := map[string]interface{}{}
 			if len(record) != len(columns) {
 				return fmt.Errorf("invalid column number: found broken row data: %v", record)
@@ -1131,7 +1195,9 @@ type jobsGetRequest struct {
 
 func (h *jobsGetHandler) Handle(ctx context.Context, r *jobsGetRequest) (*bigqueryv2.Job, error) {
 	content := *r.job.Content()
-	content.Status = &bigqueryv2.JobStatus{State: "DONE"}
+	if content.Status == nil {
+		content.Status = &bigqueryv2.JobStatus{State: "DONE"}
+	}
 	return &content, nil
 }
 
@@ -1196,7 +1262,7 @@ func (h *jobsGetQueryResultsHandler) Handle(ctx context.Context, r *jobsGetQuery
 		if end > total {
 			end = total
 		}
-		if end < total {
+		if r.maxResults > 0 && end < total {
 			pageToken = strconv.FormatUint(end, 10)
 		}
 	}
@@ -2142,7 +2208,7 @@ func (h *jobsQueryHandler) Handle(ctx context.Context, r *jobsQueryRequest) (*in
 		if end > uint64(len(formattedRows)) {
 			end = uint64(len(formattedRows))
 		}
-		if end < uint64(len(formattedRows)) {
+		if r.maxResults > 0 && end < uint64(len(formattedRows)) {
 			pageToken = strconv.FormatUint(end, 10)
 		}
 		formattedRows = formattedRows[:int(end)]
