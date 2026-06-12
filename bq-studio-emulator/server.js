@@ -95,6 +95,16 @@ async function emulatorFetch(route, options = {}) {
   return body || {};
 }
 
+function requestAbortSignal(req, res) {
+  const controller = new AbortController();
+  const abort = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  req.on("aborted", abort);
+  res.on("close", abort);
+  return controller.signal;
+}
+
 function targetById(id) {
   return TARGET_BY_ID.get(id) || TARGET_BY_ID.get(DEFAULT_TARGET_ID) || TARGETS[0];
 }
@@ -208,6 +218,7 @@ async function runQuery(target, query, options = {}) {
   const response = await emulatorFetch(`/bigquery/v2/projects/${encodeURIComponent(target.projectId)}/queries`, {
     target,
     method: "POST",
+    signal: options.signal,
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       query,
@@ -505,14 +516,14 @@ async function handleApi(req, res, url) {
     const dataset = safeResourceIdentifier(decodeURIComponent(previewMatch[1]), "dataset");
     const table = safeResourceIdentifier(decodeURIComponent(previewMatch[2]), "table");
     const limit = Math.max(1, Math.min(Number(url.searchParams.get("limit") || 100), 1000));
-    const result = await runQuery(target, `SELECT * FROM ${tableRef(target, dataset, table)} LIMIT ${limit}`);
+    const result = await runQuery(target, `SELECT * FROM ${tableRef(target, dataset, table)} LIMIT ${limit}`, { signal: requestAbortSignal(req, res) });
     return sendJson(res, 200, result);
   }
 
   if (req.method === "POST" && url.pathname === "/api/query") {
     const body = await readJson(req);
     if (!body.query?.trim()) return sendError(res, 400, "Query is required");
-    const result = await runQuery(target, body.query, { useQueryCache: body.useQueryCache });
+    const result = await runQuery(target, body.query, { useQueryCache: body.useQueryCache, signal: requestAbortSignal(req, res) });
     return sendJson(res, 200, result);
   }
 
@@ -560,6 +571,13 @@ const server = http.createServer(async (req, res) => {
       await serveStatic(req, res, url);
     }
   } catch (error) {
+    if (error.name === "AbortError") {
+      if (!res.writableEnded && !res.destroyed) {
+        sendError(res, 499, "Request canceled");
+      }
+      return;
+    }
+    if (res.writableEnded || res.destroyed) return;
     const status = error.statusCode || 500;
     sendError(res, status, error.message || "Internal server error", error.details);
   }
