@@ -7,6 +7,20 @@ on:
 permissions:
   contents: read
 jobs:
+  studio:
+    name: BQ Studio syntax
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v4
+    - name: setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+    - name: check BQ Studio
+      run: npm run check
+      working-directory: bq-studio-emulator
+
   build:
     name: Build
     strategy:
