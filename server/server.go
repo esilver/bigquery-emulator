@@ -44,13 +44,7 @@ func (s *Server) SetListenCallback(callback func(httpAddr, grpcAddr string)) {
 }
 
 func New(storage Storage) (*Server, error) {
-	server := &Server{
-		storage:    storage,
-		liveJobs:   map[string]*metadata.Job{},
-		anonTables: map[string]string{},
-	}
-	server.jobsCtx, server.jobsCancel = context.WithCancel(context.Background())
-	server.maxStmtDuration = resolveMaxStatementDuration()
+	server := &Server{storage: storage}
 	if query, ok := tempStorageQuery(storage); ok {
 		f, err := os.CreateTemp("", "")
 		if err != nil {
