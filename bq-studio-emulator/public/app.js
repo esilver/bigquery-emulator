@@ -8,6 +8,7 @@ const state = {
   expandedDataset: null,
   selectedTable: null,
   selectedSchema: null,
+  activeQuery: null,
   history: JSON.parse(localStorage.getItem("bqStudioHistory") || "[]")
 };
 
@@ -17,6 +18,7 @@ const refs = {
   connectionText: el("connectionText"),
   targetSelect: el("targetSelect"),
   statusBadge: el("statusBadge"),
+  cancelQueryBtn: el("cancelQueryBtn"),
   datasetSearch: el("datasetSearch"),
   datasetList: el("datasetList"),
   activeTableLabel: el("activeTableLabel"),
@@ -117,6 +119,13 @@ function setResultsPlaceholder(summary, message, stateClass = "") {
   refs.resultsGrid.textContent = message;
 }
 
+function formatDuration(ms) {
+  if (!Number.isFinite(ms)) return "";
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))} ms`;
+  if (ms < 10000) return `${(ms / 1000).toFixed(1)} s`;
+  return `${Math.round(ms / 1000)} s`;
+}
+
 function formatNumber(value) {
   if (value === undefined || value === null || Number.isNaN(Number(value))) return "";
   return Number(value).toLocaleString();
@@ -145,6 +154,43 @@ function setBusy(button, busyText) {
     button.disabled = false;
     button.textContent = previous;
   };
+}
+
+function startQueryProgress(startedAt) {
+  const update = () => {
+    const elapsed = formatDuration(Date.now() - startedAt);
+    const prefix = state.activeQuery?.cancelRequested ? "Cancel requested" : "Running";
+    refs.queryMeta.textContent = `${prefix} · ${elapsed}`;
+    refs.resultSummary.textContent = `${prefix} · ${elapsed}`;
+  };
+  update();
+  return window.setInterval(update, 250);
+}
+
+function showCancelButton() {
+  refs.cancelQueryBtn.classList.remove("hidden");
+  refs.cancelQueryBtn.disabled = false;
+  refs.cancelQueryBtn.textContent = "Cancel";
+  return () => {
+    refs.cancelQueryBtn.classList.add("hidden");
+    refs.cancelQueryBtn.disabled = false;
+    refs.cancelQueryBtn.textContent = "Cancel";
+  };
+}
+
+function cancelActiveQuery() {
+  if (!state.activeQuery || state.activeQuery.cancelRequested) return;
+  state.activeQuery.cancelRequested = true;
+  refs.cancelQueryBtn.disabled = true;
+  refs.cancelQueryBtn.textContent = "Canceling";
+  const elapsed = formatDuration(Date.now() - state.activeQuery.startedAt);
+  refs.queryMeta.textContent = `Cancel requested · ${elapsed}`;
+  refs.resultSummary.textContent = `Cancel requested · ${elapsed}`;
+  state.activeQuery.controller.abort();
+}
+
+function isAbortError(error) {
+  return error?.name === "AbortError";
 }
 
 async function loadHealth() {
@@ -300,16 +346,21 @@ function renderTableDetails(table) {
 }
 
 async function runQuery(query = refs.sqlEditor.value, source = "manual") {
+  if (state.activeQuery) return;
   clearError();
+  const controller = new AbortController();
   const restore = setBusy(el("runBtn"), "Running");
+  const hideCancel = showCancelButton();
   const startedAt = Date.now();
-  refs.queryMeta.textContent = "Running";
+  state.activeQuery = { controller, startedAt, cancelRequested: false };
   setResultsPlaceholder("Running query...", "Running query...", "loading-state");
+  const progressTimer = startQueryProgress(startedAt);
   try {
     const result = await api("/api/query", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ query })
+      body: JSON.stringify({ query }),
+      signal: controller.signal
     });
     renderResults(result);
     addHistory({
@@ -322,16 +373,28 @@ async function runQuery(query = refs.sqlEditor.value, source = "manual") {
     });
   } catch (error) {
     const durationMs = Date.now() - startedAt;
-    setResultsPlaceholder(`Failed · ${durationMs} ms`, "Query failed. See error details above.", "error-state");
-    showError(error.message, error.details);
+    if (isAbortError(error)) {
+      setResultsPlaceholder(
+        `Canceled · ${formatDuration(durationMs)}`,
+        "Query request canceled. Backends that honor request cancellation interrupt the running statement.",
+        "canceled-state"
+      );
+    } else {
+      setResultsPlaceholder(`Failed · ${formatDuration(durationMs)}`, "Query failed. See error details above.", "error-state");
+      showError(error.message, error.details);
+    }
     addHistory({
       query,
       source,
       ok: false,
+      canceled: isAbortError(error),
       durationMs,
       error: error.message
     });
   } finally {
+    window.clearInterval(progressTimer);
+    state.activeQuery = null;
+    hideCancel();
     restore();
   }
 }
@@ -626,7 +689,7 @@ function renderHistory() {
   refs.historyList.innerHTML = state.history.map(item => `
     <article class="history-item">
       <div class="history-meta">
-        <span>${item.ok ? "OK" : "Failed"} · ${Math.round(item.durationMs || 0)} ms · ${escapeHtml(item.source || "query")}</span>
+        <span>${item.ok ? "OK" : item.canceled ? "Canceled" : "Failed"} · ${Math.round(item.durationMs || 0)} ms · ${escapeHtml(item.source || "query")}</span>
         <span>${new Date(item.createdAt).toLocaleString()}</span>
       </div>
       <pre class="history-sql">${escapeHtml(item.query || item.error || "")}</pre>
@@ -662,6 +725,7 @@ function escapeHtml(value) {
 function bindEvents() {
   document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => activateTab(tab.dataset.tab)));
   refs.targetSelect.addEventListener("change", async () => {
+    cancelActiveQuery();
     state.activeTarget = refs.targetSelect.value;
     localStorage.setItem("bqStudioTarget", state.activeTarget);
     resetExplorerState();
@@ -670,6 +734,7 @@ function bindEvents() {
   });
   el("refreshBtn").addEventListener("click", init);
   el("runBtn").addEventListener("click", () => runQuery());
+  refs.cancelQueryBtn.addEventListener("click", cancelActiveQuery);
   refs.sqlEditor.addEventListener("keydown", event => {
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
       event.preventDefault();

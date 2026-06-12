@@ -70,8 +70,20 @@ button:disabled {
 }
 
 .secondary-btn,
-.icon-btn {
+.icon-btn,
+.danger-btn {
   background: var(--surface);
+}
+
+.danger-btn {
+  border-color: #d93025;
+  color: var(--red);
+  font-weight: 600;
+}
+
+.danger-btn:hover {
+  border-color: var(--red);
+  background: #fff7f6;
 }
 
 input,
@@ -419,6 +431,11 @@ h2 {
 .error-state {
   background: #fff7f6;
   color: var(--red);
+}
+
+.canceled-state {
+  background: #fff8e1;
+  color: var(--amber);
 }
 
 table.data-grid {
