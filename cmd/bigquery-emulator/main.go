@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -23,6 +24,7 @@ type option struct {
 	LogLevel     server.LogLevel  `description:"specify the log level (debug/info/warn/error)" long:"log-level" default:"error"`
 	LogFormat    server.LogFormat `description:"specify the log format (console/json)" long:"log-format" default:"console"`
 	Database     string           `description:"specify the database file if required. if not specified, it will be on memory" long:"database"`
+	DuckDBMaxMem string           `description:"specify the DuckDB max memory setting (for example 3GB or 3072MB)" long:"duckdb-max-memory" env:"BIGQUERY_EMULATOR_DUCKDB_MAX_MEMORY"`
 	DataFromYAML string           `description:"specify the path to the YAML file that contains the initial data" long:"data-from-yaml"`
 	Version      bool             `description:"print version" long:"version" short:"v"`
 }
@@ -78,12 +80,7 @@ func runServer(args []string, opt option) error {
 	if opt.Project == "" {
 		return fmt.Errorf("the required flag --project was not specified")
 	}
-	var db server.Storage
-	if opt.Database == "" {
-		db = server.TempStorage
-	} else {
-		db = server.Storage(fmt.Sprintf("file:%s?cache=shared", opt.Database))
-	}
+	db := storageFromOptions(opt)
 	project := types.NewProject(opt.Project)
 	if opt.Dataset != "" {
 		project.Datasets = append(project.Datasets, types.NewDataset(opt.Dataset))
@@ -141,4 +138,19 @@ func runServer(args []string, opt option) error {
 		return nil
 	}
 	return err
+}
+
+func storageFromOptions(opt option) server.Storage {
+	params := url.Values{}
+	if opt.DuckDBMaxMem != "" {
+		params.Set("max_memory", opt.DuckDBMaxMem)
+	}
+	if opt.Database == "" {
+		if encoded := params.Encode(); encoded != "" {
+			return server.Storage(fmt.Sprintf("%s?%s", server.TempStorage, encoded))
+		}
+		return server.TempStorage
+	}
+	params.Set("cache", "shared")
+	return server.Storage(fmt.Sprintf("file:%s?%s", opt.Database, params.Encode()))
 }

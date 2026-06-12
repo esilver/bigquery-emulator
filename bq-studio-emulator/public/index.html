@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BQ Studio Emulator</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">BQ</span>
+          <div>
+            <h1>BQ Studio Emulator</h1>
+            <p id="connectionText">Connecting...</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <select id="targetSelect" class="target-select" aria-label="Emulator backend"></select>
+          <span id="statusBadge" class="status pending">Checking</span>
+          <button id="refreshBtn" class="icon-btn" title="Refresh metadata">Refresh</button>
+          <button id="runBtn" class="primary-btn" title="Run query">Run</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="sidebar">
+          <div class="sidebar-header">
+            <h2>Explorer</h2>
+            <input id="datasetSearch" type="search" placeholder="Search datasets">
+          </div>
+          <div id="datasetList" class="dataset-list"></div>
+        </aside>
+
+        <section class="center-pane">
+          <nav class="tabs" aria-label="Workspace tabs">
+            <button class="tab active" data-tab="query">Query</button>
+            <button class="tab" data-tab="load">Load CSV</button>
+            <button class="tab" data-tab="benchmark">Benchmark</button>
+            <button class="tab" data-tab="history">History</button>
+          </nav>
+
+          <section id="queryTab" class="tab-panel active">
+            <div class="editor-toolbar">
+              <div class="query-title">
+                <span id="activeTableLabel">No table selected</span>
+                <span id="queryMeta" class="muted"></span>
+              </div>
+              <div class="button-row">
+                <button id="previewBtn" class="secondary-btn">Preview</button>
+                <button id="sampleCountBtn" class="secondary-btn">Count</button>
+                <button id="sampleAggregateBtn" class="secondary-btn">Aggregate</button>
+              </div>
+            </div>
+            <textarea id="sqlEditor" spellcheck="false">SELECT COUNT(*) AS row_count
+FROM `finance-emulator.dbt_test__audit.events_1m`</textarea>
+            <div id="queryError" class="error-box hidden"></div>
+            <section class="results-panel">
+              <div class="panel-title">
+                <h2>Results</h2>
+                <span id="resultSummary" class="muted">No results</span>
+              </div>
+              <div id="resultsGrid" class="grid-shell empty-state">Run a query to populate results.</div>
+            </section>
+          </section>
+
+          <section id="loadTab" class="tab-panel">
+            <form id="csvForm" class="load-layout">
+              <div class="form-grid">
+                <label>
+                  <span>Dataset</span>
+                  <input id="csvDataset" name="dataset" value="dbt_test__audit">
+                </label>
+                <label>
+                  <span>Table</span>
+                  <input id="csvTable" name="table" value="csv_ui_load_smoke">
+                </label>
+                <label>
+                  <span>Write mode</span>
+                  <select id="csvWriteDisposition" name="writeDisposition">
+                    <option value="WRITE_TRUNCATE">WRITE_TRUNCATE</option>
+                    <option value="WRITE_APPEND">WRITE_APPEND</option>
+                    <option value="WRITE_EMPTY">WRITE_EMPTY</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Skip rows</span>
+                  <input id="csvSkipRows" name="skipLeadingRows" type="number" min="0" value="1">
+                </label>
+              </div>
+              <label class="file-input">
+                <span>CSV file</span>
+                <input id="csvFile" name="file" type="file" accept=".csv,text/csv">
+              </label>
+              <div class="schema-editor">
+                <div class="panel-title">
+                  <h2>Schema</h2>
+                  <div class="button-row">
+                    <button id="inferSchemaBtn" type="button" class="secondary-btn">Infer</button>
+                    <button id="loadCsvBtn" type="submit" class="primary-btn">Load</button>
+                  </div>
+                </div>
+                <textarea id="schemaJson" spellcheck="false"></textarea>
+              </div>
+              <div id="loadResult" class="load-result muted">No load job yet.</div>
+            </form>
+          </section>
+
+          <section id="benchmarkTab" class="tab-panel">
+            <div class="benchmark-controls">
+              <label>
+                <span>Dataset</span>
+                <input id="benchDataset" value="dbt_test__audit">
+              </label>
+              <label>
+                <span>Table</span>
+                <input id="benchTable" value="events_1m">
+              </label>
+              <label>
+                <span>Runs</span>
+                <input id="benchRuns" type="number" min="1" max="20" value="3">
+              </label>
+              <button id="runBenchmarkBtn" class="primary-btn">Run benchmark</button>
+            </div>
+            <div id="benchmarkOutput" class="benchmark-output empty-state">No benchmark run.</div>
+          </section>
+
+          <section id="historyTab" class="tab-panel">
+            <div class="panel-title">
+              <h2>Query History</h2>
+              <button id="clearHistoryBtn" class="secondary-btn">Clear</button>
+            </div>
+            <div id="historyList" class="history-list empty-state">No query history.</div>
+          </section>
+        </section>
+
+        <aside class="details-pane">
+          <div class="panel-title">
+            <h2>Details</h2>
+            <span id="tableStats" class="muted"></span>
+          </div>
+          <div id="tableDetails" class="details-content empty-state">Select a table.</div>
+        </aside>
+      </main>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>

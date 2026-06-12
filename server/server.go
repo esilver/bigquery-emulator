@@ -44,13 +44,28 @@ func (s *Server) SetListenCallback(callback func(httpAddr, grpcAddr string)) {
 }
 
 func New(storage Storage) (*Server, error) {
-	server := &Server{storage: storage}
-	if storage == TempStorage {
+	server := &Server{
+		storage:    storage,
+		liveJobs:   map[string]*metadata.Job{},
+		anonTables: map[string]string{},
+	}
+	server.jobsCtx, server.jobsCancel = context.WithCancel(context.Background())
+	server.maxStmtDuration = resolveMaxStatementDuration()
+	if query, ok := tempStorageQuery(storage); ok {
 		f, err := os.CreateTemp("", "")
 		if err != nil {
 			return nil, fmt.Errorf("failed to create temporary file: %w", err)
 		}
-		storage = Storage(fmt.Sprintf("file:%s?cache=shared", f.Name()))
+		// DuckDB (unlike SQLite) refuses to open an existing file that is
+		// not already a valid database, so hand it a fresh path: keep the
+		// unique name CreateTemp reserved but remove the empty file itself.
+		if err := f.Close(); err != nil {
+			return nil, fmt.Errorf("failed to close temporary file: %w", err)
+		}
+		if err := os.Remove(f.Name()); err != nil {
+			return nil, fmt.Errorf("failed to remove temporary file: %w", err)
+		}
+		storage = appendStorageQuery(Storage(fmt.Sprintf("file:%s?cache=shared", f.Name())), query)
 		server.storage = storage
 		server.fileCleanup = func() error {
 			return os.Remove(f.Name())
