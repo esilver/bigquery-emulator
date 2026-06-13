@@ -22,6 +22,7 @@ from google.api_core import exceptions as api_exceptions
 from google.api_core.client_options import ClientOptions
 from google.auth.credentials import AnonymousCredentials
 from google.cloud import bigquery
+from google.cloud.bigquery.enums import QueryApiMethod
 
 # A wedged or unreachable emulator surfaces as one of these; the rest of the
 # run is abandoned rather than retried for minutes per remaining case.
@@ -115,7 +116,11 @@ def run_case(client, case):
     # wedged emulator fails the case quickly instead of retrying for minutes.
     retry = bigquery.DEFAULT_RETRY.with_timeout(REQUEST_TIMEOUT)
     job = client.query(
-        case["sql"], job_config=job_config, timeout=REQUEST_TIMEOUT, retry=retry
+        case["sql"],
+        job_config=job_config,
+        timeout=REQUEST_TIMEOUT,
+        retry=retry,
+        api_method=QueryApiMethod.QUERY,
     )
     rows = [normalize(dict(row)) for row in job.result(timeout=REQUEST_TIMEOUT, retry=retry)]
     expected = case["expected"]
