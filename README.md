@@ -1,13 +1,18 @@
 # BigQuery Emulator
 
-[![build and test](https://github.com/goccy/bigquery-emulator/actions/workflows/test.yml/badge.svg)](https://github.com/goccy/bigquery-emulator/actions/workflows/test.yml)
+> A fork of [goccy/bigquery-emulator](https://github.com/goccy/bigquery-emulator) with the SQL backend swapped to the DuckDB-backed [esilver/googlesqlite](https://github.com/esilver/googlesqlite) engine, running pure-Go (`CGO_ENABLED=0`). The original BigQuery emulator is created and maintained by [@goccy](https://github.com/goccy).
+
+[![build and test](https://github.com/esilver/bigquery-emulator/actions/workflows/test.yml/badge.svg)](https://github.com/esilver/bigquery-emulator/actions/workflows/test.yml)
+[![integration](https://github.com/esilver/bigquery-emulator/actions/workflows/integration.yml/badge.svg)](https://github.com/esilver/bigquery-emulator/actions/workflows/integration.yml)
 [![GoDoc](https://godoc.org/github.com/goccy/bigquery-emulator?status.svg)](https://pkg.go.dev/github.com/goccy/bigquery-emulator?tab=doc)
-[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-db61a2)](https://github.com/sponsors/goccy)
+[![Sponsor goccy](https://img.shields.io/badge/Sponsor%20goccy-%E2%9D%A4-db61a2)](https://github.com/sponsors/goccy)
 
 
 The only open-source emulator for Google BigQuery — run a BigQuery-compatible server on your local machine for testing and development, with no cloud project or credentials required.
 
 # Quick start
+
+> Note: the `ghcr.io/goccy/...` image below is the **upstream, SQLite-backed** build. To run **this fork** (DuckDB-backed, pure-Go), build from source: `git clone https://github.com/esilver/bigquery-emulator && cd bigquery-emulator && go run ./cmd/bigquery-emulator --project=test`.
 
 ```console
 $ docker run -it -p 9050:9050 -p 9060:9060 ghcr.io/goccy/bigquery-emulator:latest --project=test
@@ -49,13 +54,9 @@ The goal of this project is to build a server that behaves exactly like BigQuery
 
 # Sponsorship
 
-This is a personal project. It receives no support of any kind from Google — no sponsorship, no contributions, no promotion.
+`bigquery-emulator` was created and is maintained by [@goccy](https://github.com/goccy) (Masaaki Goshima), who built the only open-source BigQuery emulator to fill a long-standing gap (Google's emulator request, [issue 129248927](https://issuetracker.google.com/issues/129248927), has sat open for years). This repository is a fork that swaps the SQL backend to DuckDB and runs pure-Go; all of the upstream emulator work it builds on is goccy's.
 
-For example, Google has had a request for a BigQuery emulator open on its Issue Tracker ([issue 129248927](https://issuetracker.google.com/issues/129248927)) for seven years without taking any action. Unable to watch that any longer, in 2022 I built `bigquery-emulator` — the only BigQuery emulator in the world — and have maintained it ever since.
-
-I do not use BigQuery in my own job, however. I simply happen to have the skills to build this, noticed how many people are struggling without it, and so I spend my personal time and money on it. I develop it on my days off and after work, while working full time and maintaining a lot of other OSS, so the time available for this project is limited.
-
-Because of that, keeping this project alive needs your help. Emulating BigQuery locally brings many benefits to development and can significantly cut development costs. Could you return a small part of those savings to me? I believe doing so leads to a better future for both me and your company. Especially if you are part of a commercial company and could use this project, I'd be glad if you could consider sponsoring me.
+If this project saves you time, please consider sponsoring the upstream author: <https://github.com/sponsors/goccy>.
 
 # Install
 
