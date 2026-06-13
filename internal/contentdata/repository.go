@@ -654,6 +654,26 @@ func (r *Repository) AddTableData(ctx context.Context, tx *connection.Tx, projec
 				}
 			}
 
+			// A time.Time binds directly into a TIMESTAMP column, but DATE,
+			// DATETIME and TIME are civil (zoneless): the value layer encodes a
+			// time.Time as a zoned TIMESTAMP, so binding it into one of those
+			// columns applies a local-zone shift (e.g. a midnight-UTC DATE rolls
+			// back a day west of UTC). Render those as a civil-form string so the
+			// cast is purely textual.
+			if t, isTime := value.(time.Time); isTime {
+				switch column.Type {
+				case types.DATE:
+					values = append(values, formatCivilDate(t))
+					continue
+				case types.DATETIME:
+					values = append(values, formatCivilDateTime(t))
+					continue
+				case types.TIME:
+					values = append(values, formatCivilTime(t))
+					continue
+				}
+			}
+
 			values = append(values, value)
 		}
 
@@ -663,6 +683,32 @@ func (r *Repository) AddTableData(ctx context.Context, tx *connection.Tx, projec
 	}
 
 	return nil
+}
+
+// formatCivilDate renders a time as the BigQuery DATE civil form "YYYY-MM-DD"
+// in UTC.
+func formatCivilDate(t time.Time) string {
+	return t.UTC().Format("2006-01-02")
+}
+
+// formatCivilDateTime renders a time as the BigQuery DATETIME civil form
+// "YYYY-MM-DD HH:MM:SS[.ffffff]" in UTC, dropping the fractional part when zero.
+func formatCivilDateTime(t time.Time) string {
+	t = t.UTC()
+	if t.Nanosecond() == 0 {
+		return t.Format("2006-01-02 15:04:05")
+	}
+	return t.Format("2006-01-02 15:04:05.999999")
+}
+
+// formatCivilTime renders a time as the BigQuery TIME civil form
+// "HH:MM:SS[.ffffff]" in UTC, dropping the fractional part when zero.
+func formatCivilTime(t time.Time) string {
+	t = t.UTC()
+	if t.Nanosecond() == 0 {
+		return t.Format("15:04:05")
+	}
+	return t.Format("15:04:05.999999")
 }
 
 // jsonColumnText returns the JSON text for a value bound to a JSON column.
