@@ -38,6 +38,11 @@ TRANSPORT_ERRORS = (
 # Per-request and per-job-completion timeout, in seconds.
 REQUEST_TIMEOUT = 20
 
+QUERY_API_METHODS = {
+    "QUERY": QueryApiMethod.QUERY,
+    "INSERT": QueryApiMethod.INSERT,
+}
+
 
 def normalize(value):
     """Map a value returned by the Python client to the canonical form."""
@@ -107,7 +112,20 @@ def apply_setup(client, setup):
         raise RuntimeError("insertAll reported errors: {}".format(errors))
 
 
-def run_case(client, case):
+def configured_query_api_method():
+    """Return the configured QueryApiMethod, or None for the client default."""
+    method_name = os.environ.get("PYTHON_QUERY_API_METHOD", "QUERY").upper()
+    if method_name == "DEFAULT":
+        return None
+    try:
+        return QUERY_API_METHODS[method_name]
+    except KeyError as exc:
+        raise ValueError(
+            "PYTHON_QUERY_API_METHOD must be DEFAULT, QUERY, or INSERT"
+        ) from exc
+
+
+def run_case(client, case, query_api_method):
     if "setup" in case:
         apply_setup(client, case["setup"])
     params = [make_param(p) for p in case.get("params", [])]
@@ -115,13 +133,14 @@ def run_case(client, case):
     # Bound both the per-request timeout and the overall retry window so a
     # wedged emulator fails the case quickly instead of retrying for minutes.
     retry = bigquery.DEFAULT_RETRY.with_timeout(REQUEST_TIMEOUT)
-    job = client.query(
-        case["sql"],
-        job_config=job_config,
-        timeout=REQUEST_TIMEOUT,
-        retry=retry,
-        api_method=QueryApiMethod.QUERY,
-    )
+    query_kwargs = {
+        "job_config": job_config,
+        "timeout": REQUEST_TIMEOUT,
+        "retry": retry,
+    }
+    if query_api_method is not None:
+        query_kwargs["api_method"] = query_api_method
+    job = client.query(case["sql"], **query_kwargs)
     rows = [normalize(dict(row)) for row in job.result(timeout=REQUEST_TIMEOUT, retry=retry)]
     expected = case["expected"]
     if values_equal(rows, expected):
@@ -140,12 +159,14 @@ def main():
     project = os.environ.get("PROJECT_ID", "test")
     cases_file = os.environ["CASES_FILE"]
     report_file = os.environ["REPORT_FILE"]
+    label = os.environ.get("CLIENT_LABEL", "python")
 
     with open(cases_file) as fh:
         cases = json.load(fh)["cases"]
 
     results = []
     try:
+        query_api_method = configured_query_api_method()
         client = bigquery.Client(
             project,
             client_options=ClientOptions(api_endpoint=host),
@@ -157,7 +178,7 @@ def main():
                 results.append({"name": case["name"], "status": "error", "detail": aborted})
                 continue
             try:
-                results.append(run_case(client, case))
+                results.append(run_case(client, case, query_api_method))
             except TRANSPORT_ERRORS as exc:
                 # The emulator is unreachable or unresponsive; abandon the rest
                 # of the run instead of retrying every remaining case.
@@ -177,12 +198,12 @@ def main():
             {"name": c["name"], "status": "error", "detail": detail} for c in cases
         ]
 
-    report = {"language": "python", "cases": results}
+    report = {"language": label, "cases": results}
     with open(report_file, "w") as fh:
         json.dump(report, fh)
 
     failed = sum(1 for r in results if r["status"] != "pass")
-    print("python: {} case(s), {} not passing".format(len(results), failed))
+    print("{}: {} case(s), {} not passing".format(label, len(results), failed))
     sys.exit(0)
 
 

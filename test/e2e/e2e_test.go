@@ -1,9 +1,9 @@
 // Package e2e runs the official BigQuery client libraries (Python, Ruby, PHP,
-// Java) against a locally started emulator and asserts that every client
-// agrees with the shared query corpus in cases/cases.json.
+// Node, bq, Java) against a locally started emulator and asserts that every
+// client agrees with the shared query corpus in cases/cases.json.
 //
 // The emulator runs in-process on the host; only the clients are containized.
-// A single multi-stage image (Dockerfile) bundles all four client libraries.
+// A single multi-stage image (Dockerfile) bundles all client libraries.
 // For each language the test starts a fresh emulator, runs the client image
 // once, and surfaces the per-query result as a Go subtest, giving a
 // language x query matrix under `go test ./test/e2e/...`.
@@ -32,7 +32,9 @@ import (
 const clientImage = "bigquery-emulator-e2e-clients:latest"
 
 // clientLanguages is the set of client languages exercised by the matrix.
-var clientLanguages = []string{"python", "ruby", "php", "node", "bq", "java"}
+// python uses jobs.query for cross-client parity; python_insert uses the
+// Python library default, which exercises the jobs.insert query flow.
+var clientLanguages = []string{"python", "python_insert", "ruby", "php", "node", "bq", "java"}
 
 // knownIssues records matrix cells (language/case, or language/* for a whole
 // language) that currently diverge because of a tracked emulator or client
@@ -128,17 +130,15 @@ func TestClientConformance(t *testing.T) {
 func runLanguage(t *testing.T, lang string) {
 	ctx := context.Background()
 	emulatorPort := startEmulator(t)
+	clientCmd, clientEnv := clientCommandAndEnv(lang, emulatorPort)
 
 	// The emulator listens on the host; the container reaches it through the
 	// Docker host gateway exposed as host.docker.internal.
 	req := testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image: clientImage,
-			Cmd:   []string{lang},
-			Env: map[string]string{
-				"EMULATOR_HOST": fmt.Sprintf("http://host.docker.internal:%d", emulatorPort),
-				"PROJECT_ID":    "test",
-			},
+			Image:      clientImage,
+			Cmd:        clientCmd,
+			Env:        clientEnv,
 			ExtraHosts: []string{"host.docker.internal:host-gateway"},
 			WaitingFor: wait.ForExit().WithExitTimeout(3 * time.Minute),
 		},
@@ -177,6 +177,22 @@ func runLanguage(t *testing.T, lang string) {
 			}
 		})
 	}
+}
+
+func clientCommandAndEnv(lang string, emulatorPort int) ([]string, map[string]string) {
+	env := map[string]string{
+		"EMULATOR_HOST": fmt.Sprintf("http://host.docker.internal:%d", emulatorPort),
+		"PROJECT_ID":    "test",
+	}
+	switch lang {
+	case "python_insert":
+		env["CLIENT_LABEL"] = "python_insert"
+		env["PYTHON_QUERY_API_METHOD"] = "DEFAULT"
+		return []string{"python"}, env
+	case "python":
+		env["PYTHON_QUERY_API_METHOD"] = "QUERY"
+	}
+	return []string{lang}, env
 }
 
 // firstLine returns the first non-empty line of s, for compact skip messages.
