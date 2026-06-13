@@ -4313,6 +4313,9 @@ func TestJobsInsertQueryResultsAndStatus(t *testing.T) {
 		if got := len(queryRows(t, body)); got != 0 {
 			t.Fatalf("maxResults=0 returned %d rows; want 0", got)
 		}
+		if _, ok := body["rows"]; ok {
+			t.Fatalf("maxResults=0 included rows field; Python jobs.insert treats that as a complete empty first page: %v", body)
+		}
 		if body["pageToken"] != nil && body["pageToken"] != "" {
 			t.Fatalf("maxResults=0 returned pageToken %v; want empty", body["pageToken"])
 		}
