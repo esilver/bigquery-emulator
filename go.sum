@@ -121,8 +121,8 @@ github.com/esilver/duckdb-go-pure v0.3.13 h1:gNTlJ5R2qtwvBv4/WnYZu8GO9WVRw2tpm+J
 github.com/esilver/duckdb-go-pure v0.3.13/go.mod h1:ArM/CohRgBCoOLcKcDJjMuFoWvFHIL7FYNzI5aJs5VI=
 github.com/esilver/go-googlesql v0.2.4-finalizer.1.0.20260611225755-3bdff21371a3 h1:Tm09ZeN8KjwfBCt1myLlszltewYuGLff66rrfY0rBB4=
 github.com/esilver/go-googlesql v0.2.4-finalizer.1.0.20260611225755-3bdff21371a3/go.mod h1:0CUrO9fG9A5lAxOQDjCUr7ibzoRLiv2iaAwbGvESAhM=
-github.com/esilver/googlesqlite v0.0.0-20260613025222-982ff43108bf h1:Cpm/ZR8ngr4o/w4XdNSKv14tMuFmTveauEslhFnHE+I=
-github.com/esilver/googlesqlite v0.0.0-20260613025222-982ff43108bf/go.mod h1:RJalMrjUyXFv65duV10rHvmujYxNoaHGGeaZvC/H3sk=
+github.com/esilver/googlesqlite v0.0.0-20260613061542-655bf1c976cc h1:/FanHMjYl7AI1qwH3Div+0eNQ8Av/9sHHFDFHAVkyLg=
+github.com/esilver/googlesqlite v0.0.0-20260613061542-655bf1c976cc/go.mod h1:RJalMrjUyXFv65duV10rHvmujYxNoaHGGeaZvC/H3sk=
 github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2Wg=
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/fsouza/fake-gcs-server v1.54.0 h1:DGO4EkFVbtP/A5Ha+CAHHx+Xa6O6LeskMB4hQ1wBE48=

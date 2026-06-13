@@ -11,7 +11,7 @@ require (
 	github.com/go-playground/validator/v10 v10.30.2
 	github.com/goccy/go-json v0.10.6
 	github.com/goccy/go-yaml v1.19.2
-	github.com/goccy/googlesqlite v0.3.0
+	github.com/goccy/googlesqlite v0.3.1
 	github.com/google/go-cmp v0.7.0
 	github.com/googleapis/gax-go/v2 v2.22.0
 	github.com/gorilla/mux v1.8.1
@@ -149,6 +149,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/goccy/googlesqlite => github.com/esilver/googlesqlite v0.0.0-20260613025222-982ff43108bf
+replace github.com/goccy/googlesqlite => github.com/esilver/googlesqlite v0.0.0-20260613061542-655bf1c976cc
 
 replace github.com/goccy/go-googlesql => github.com/esilver/go-googlesql v0.2.4-finalizer.1.0.20260611225755-3bdff21371a3
