@@ -89,6 +89,17 @@ function isStaleLoad(generation) {
   return generation !== state.loadGeneration;
 }
 
+function currentViewToken() {
+  return {
+    target: state.activeTarget,
+    generation: state.loadGeneration
+  };
+}
+
+function isStaleView(token) {
+  return token.target !== state.activeTarget || token.generation !== state.loadGeneration;
+}
+
 function resetExplorerState() {
   state.health = null;
   state.datasets = [];
@@ -373,12 +384,14 @@ function renderTableDetails(table) {
 async function runQuery(query = refs.sqlEditor.value, source = "manual") {
   if (state.activeQuery) return;
   clearError();
+  const viewToken = currentViewToken();
   const controller = new AbortController();
   const restore = setBusy(el("runBtn"), "Running");
   const hideCancel = showCancelButton();
   const startedAt = Date.now();
   const cancelMode = activeTargetConfig()?.cancelMode || "interrupt";
-  state.activeQuery = { controller, startedAt, cancelRequested: false, cancelMode };
+  const activeQuery = { controller, startedAt, cancelRequested: false, cancelMode };
+  state.activeQuery = activeQuery;
   setResultsPlaceholder("Running query...", "Running query...", "loading-state");
   const progressTimer = startQueryProgress(startedAt);
   try {
@@ -388,6 +401,7 @@ async function runQuery(query = refs.sqlEditor.value, source = "manual") {
       body: JSON.stringify({ query }),
       signal: controller.signal
     });
+    if (isStaleView(viewToken)) return;
     renderResults(result);
     addHistory({
       query,
@@ -398,6 +412,7 @@ async function runQuery(query = refs.sqlEditor.value, source = "manual") {
       jobId: result.jobId
     });
   } catch (error) {
+    if (isStaleView(viewToken)) return;
     const durationMs = Date.now() - startedAt;
     if (isAbortError(error)) {
       const detached = cancelMode === "detach";
@@ -423,7 +438,7 @@ async function runQuery(query = refs.sqlEditor.value, source = "manual") {
     });
   } finally {
     window.clearInterval(progressTimer);
-    state.activeQuery = null;
+    if (state.activeQuery === activeQuery) state.activeQuery = null;
     hideCancel();
     restore();
   }
@@ -479,14 +494,18 @@ function isNestedCellValue(value) {
 async function previewSelectedTable() {
   if (!state.selectedDataset || !state.selectedTable) return;
   clearError();
+  const viewToken = currentViewToken();
+  const dataset = state.selectedDataset;
+  const table = state.selectedTable;
   const startedAt = Date.now();
   refs.queryMeta.textContent = "Running";
   setResultsPlaceholder("Loading preview...", "Loading preview...", "loading-state");
   try {
-    const result = await api(`/api/tables/${encodeURIComponent(state.selectedDataset)}/${encodeURIComponent(state.selectedTable)}/preview?limit=100`);
+    const result = await api(`/api/tables/${encodeURIComponent(dataset)}/${encodeURIComponent(table)}/preview?limit=100`);
+    if (isStaleView(viewToken)) return;
     renderResults(result);
     addHistory({
-      query: `Preview ${state.selectedDataset}.${state.selectedTable}`,
+      query: `Preview ${dataset}.${table}`,
       source: "preview",
       ok: true,
       durationMs: result.durationMs,
@@ -494,6 +513,7 @@ async function previewSelectedTable() {
       jobId: result.jobId
     });
   } catch (error) {
+    if (isStaleView(viewToken)) return;
     setResultsPlaceholder(`Preview failed · ${Date.now() - startedAt} ms`, "Preview failed. See error details above.", "error-state");
     showError(error.message, error.details);
   }
