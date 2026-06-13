@@ -35,13 +35,13 @@ At a glance, the emulator supports dataset / table / job / tabledata management,
 
 ## GoogleSQL
 
-Query execution is powered by [googlesqlite](https://github.com/goccy/googlesqlite), which implements GoogleSQL on top of an embedded local SQL engine. The exact function/type coverage is tracked in googlesqlite's generated spec matrix rather than duplicated here. Beyond functions, it also supports:
+Query execution is powered by [googlesqlite](https://github.com/esilver/googlesqlite), which implements GoogleSQL on top of an embedded local SQL engine. This fork links the DuckDB-backed googlesqlite build by default, with the upstream SQLite-backed emulator kept available for side-by-side comparison in BQ Studio. The exact function/type coverage is tracked in googlesqlite's generated spec matrix rather than duplicated here. Beyond functions, it also supports:
 
 - Wildcard tables
 - Templated-argument functions
 - JavaScript UDF
 
-For the authoritative, per-function and per-type support matrix, see the [googlesqlite status](https://github.com/goccy/googlesqlite#status).
+For the authoritative, per-function and per-type support matrix, see the [googlesqlite status](https://github.com/esilver/googlesqlite#status).
 
 # Goals
 
@@ -314,7 +314,7 @@ If you have specified a database file when starting `bigquery-emulator`, inspect
 
 ## BigQuery Emulator Architecture Overview
 
-After receiving a GoogleSQL query via the REST API from bq or a client SDK, the googlesqlite driver parses and analyzes the query using [go-googlesql](https://github.com/goccy/go-googlesql), then lowers and executes it against the embedded backend linked into this build.
+After receiving a GoogleSQL query via the REST API from bq or a client SDK, the googlesqlite driver parses and analyzes the query using [go-googlesql](https://github.com/esilver/go-googlesql), then lowers and executes it against the embedded backend linked into this build.
 
 <img width="600px" src="https://user-images.githubusercontent.com/209884/196145011-e35c2df4-5f5d-43ce-b7df-08cd130b5d31.png"></img>
 
