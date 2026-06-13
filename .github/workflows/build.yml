@@ -15,7 +15,7 @@ jobs:
       id-token: write          # for actions/attest-build-provenance OIDC token
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: docker/metadata-action@v5
         id: meta
@@ -63,7 +63,7 @@ jobs:
       # gate on visibility so a private fork's run does not fail here.
       - name: Attest build provenance
         if: github.event.repository.visibility == 'public'
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ env.REGISTRY }}/${{ github.repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
