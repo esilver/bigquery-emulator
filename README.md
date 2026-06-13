@@ -106,6 +106,7 @@ Usage:
 Application Options:
       --project=        specify the project name
       --dataset=        specify the dataset name
+      --host=           specify the host (default: 0.0.0.0)
       --port=           specify the http port number. this port used by bigquery api (default: 9050)
       --grpc-port=      specify the grpc port number. this port used by bigquery storage api (default: 9060)
       --log-level=      specify the log level (debug/info/warn/error) (default: error)
