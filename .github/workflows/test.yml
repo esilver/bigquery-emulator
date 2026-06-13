@@ -16,7 +16,7 @@ jobs:
     - name: setup Node
       uses: actions/setup-node@v6
       with:
-        node-version: 20
+        node-version: 24
     - name: check BQ Studio
       run: npm run check
       working-directory: bq-studio-emulator
