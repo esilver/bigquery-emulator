@@ -30,3 +30,16 @@ Seed the upstream SQLite emulator database directly:
 ```bash
 node scripts/seed-sqlite-storage.mjs /private/tmp/bqe-sqlite-data-fast/finance-emulator-sqlite.db
 ```
+
+Seed a bounded NYC Taxi sample into the DuckDB-backed emulator:
+
+```bash
+NYC_TAXI_ROW_LIMIT=100000 npm run seed:nyc-taxi
+```
+
+This downloads the official TLC Yellow Taxi January 2024 Parquet file into
+`/private/tmp/bq-studio-nyc-taxi`, creates a CSV sample with the local DuckDB
+CLI, and loads it into `finance-emulator.nyc_taxi.yellow_tripdata_2024_01`.
+The pickup/dropoff datetime fields are loaded as strings to avoid the emulator's
+current CSV DATETIME binding issue. Use `NYC_TAXI_PREPARE_ONLY=1` to prepare the
+local files without contacting the emulator.
