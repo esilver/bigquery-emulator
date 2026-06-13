@@ -49,7 +49,7 @@ REST surface. The tables below list every documented resource and method.
 | `insert` | ✅ | |
 | `list` | ✅ | |
 | `patch` | ✅ | |
-| `update` | ❌ | Use `patch` instead. |
+| `update` | ✅ | |
 | `delete` | ✅ | |
 | `getIamPolicy` | ❌ | IAM policy management is not implemented. |
 | `setIamPolicy` | ❌ | IAM policy management is not implemented. |
