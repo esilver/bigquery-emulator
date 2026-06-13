@@ -35,8 +35,8 @@ archives:
 nfpms:
   - file_name_template: >-
       {{ .ProjectName }}_{{ .Version }}-1_{{ .Arch }}
-    homepage: https://github.com/goccy/bigquery-emulator
-    maintainer: goccy
+    homepage: https://github.com/esilver/bigquery-emulator
+    maintainer: esilver
     description: BigQuery emulator server implemented in pure Go
     license: MIT
     formats:

@@ -141,7 +141,7 @@ There is no `models.insert` in the BigQuery API — models are created with
 | Standard tables | ✅ | |
 | Logical views | ✅ | Created via DDL or `tables.insert`; view schemas are hydrated. |
 | Materialized views | ✅ | Registered and queryable. |
-| External tables | ❌ | The table type exists but is not implemented. |
+| External tables | 🟡 | Source data is snapshotted into a backing table at create time (load-job semantics), not read live per query. |
 | Table snapshots | ❌ | |
 | Table clones | ❌ | |
 | Partitioned tables | 🟡 | Tables with partitioning metadata are accepted, but partition pruning / `_PARTITIONTIME` semantics are not emulated. |

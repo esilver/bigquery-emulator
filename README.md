@@ -77,21 +77,21 @@ the DuckDB engine.
 You can also download the docker image with the following command
 
 ```console
-$ docker pull ghcr.io/goccy/bigquery-emulator:latest
+$ docker pull ghcr.io/esilver/bigquery-emulator:latest
 ```
 
 The image is a multi-arch manifest, so the same tag works on both `linux/amd64` and `linux/arm64`.
 
-You can also download prebuilt binaries (darwin/linux/windows, amd64/arm64) and `deb`/`rpm`/`apk` packages directly from [releases](https://github.com/goccy/bigquery-emulator/releases).
+You can also download prebuilt binaries (darwin/linux/windows, amd64/arm64) and `deb`/`rpm`/`apk` packages directly from [releases](https://github.com/esilver/bigquery-emulator/releases).
 
 Both the release archives and the container image ship a signed [GitHub build-provenance attestation](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds). Verify them with the GitHub CLI:
 
 ```console
 # release archive
-$ gh attestation verify bigquery-emulator_v0.0.0_linux_amd64.tar.gz --repo goccy/bigquery-emulator
+$ gh attestation verify bigquery-emulator_v0.0.0_linux_amd64.tar.gz --repo esilver/bigquery-emulator
 
 # container image
-$ gh attestation verify oci://ghcr.io/goccy/bigquery-emulator:latest --repo goccy/bigquery-emulator
+$ gh attestation verify oci://ghcr.io/esilver/bigquery-emulator:latest --repo esilver/bigquery-emulator
 ```
 
 # How to start the standalone server
@@ -132,7 +132,7 @@ $ ./bigquery-emulator --project=test
 If you want to use docker image to start emulator, specify like the following.
 
 ```console
-$ docker run -it -p 9050:9050 -p 9060:9060 ghcr.io/goccy/bigquery-emulator:latest --project=test
+$ docker run -it -p 9050:9050 -p 9060:9060 ghcr.io/esilver/bigquery-emulator:latest --project=test
 ```
 
 * If you are using an M1 Mac ( and Docker Desktop ) you may get a warning. In that case please use `--platform linux/x86_64` option.
