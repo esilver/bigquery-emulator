@@ -12,12 +12,14 @@ The only open-source emulator for Google BigQuery — run a BigQuery-compatible 
 
 # Quick start
 
-> Note: the `ghcr.io/goccy/...` image below is the **upstream, SQLite-backed** build. To run **this fork** (DuckDB-backed, pure-Go), build from source: `git clone https://github.com/esilver/bigquery-emulator && cd bigquery-emulator && go run ./cmd/bigquery-emulator --project=test`.
+Run this fork (DuckDB-backed, pure-Go) from its prebuilt image:
 
 ```console
-$ docker run -it -p 9050:9050 -p 9060:9060 ghcr.io/goccy/bigquery-emulator:latest --project=test
+$ docker run -it -p 9050:9050 -p 9060:9060 ghcr.io/esilver/bigquery-emulator:latest --project=test
 $ bq --api http://0.0.0.0:9050 query --project_id=test "SELECT 1"
 ```
+
+The image is published by CI (`docker.yml`) from the `pure-go-duckdb-backend` branch. To build from source instead: `git clone https://github.com/esilver/bigquery-emulator && cd bigquery-emulator && go run ./cmd/bigquery-emulator --project=test`. The original upstream image (SQLite-backed) is `ghcr.io/goccy/bigquery-emulator:latest`.
 
 See [Install](#install) for `go install`, prebuilt binaries and packages, and [How to start the standalone server](#how-to-start-the-standalone-server) for the full set of options and client examples.
 
