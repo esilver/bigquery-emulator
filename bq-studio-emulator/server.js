@@ -404,7 +404,9 @@ function inferSchema(csvBuffer, skipLeadingRows) {
       : headerValues.map((_, index) => `field_${index + 1}`)
   );
   const sampleStart = effectiveSkipLeadingRows ? headerIndex + 1 : 0;
-  const sampleLines = lines.slice(sampleStart, sampleStart + 100);
+  const sampleLines = lines
+    .slice(sampleStart, sampleStart + 100)
+    .filter(line => !isCsvFooterRecord(line));
   const columns = headers.map(() => []);
   for (const line of sampleLines) {
     const values = splitCsvLine(line);
@@ -674,28 +676,56 @@ async function serveStatic(req, res, url) {
   }
 }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-  try {
-    if (url.pathname.startsWith("/api/")) {
-      await handleApi(req, res, url);
-    } else {
-      await serveStatic(req, res, url);
-    }
-  } catch (error) {
-    if (error.name === "AbortError") {
-      if (!responseClosed(res)) {
-        sendError(res, 499, "Request canceled");
+function createServer() {
+  return http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    try {
+      if (url.pathname.startsWith("/api/")) {
+        await handleApi(req, res, url);
+      } else {
+        await serveStatic(req, res, url);
       }
-      return;
+    } catch (error) {
+      if (error.name === "AbortError") {
+        if (!responseClosed(res)) {
+          sendError(res, 499, "Request canceled");
+        }
+        return;
+      }
+      if (responseClosed(res)) return;
+      const status = error.statusCode || 500;
+      sendError(res, status, error.message || "Internal server error", error.details);
     }
-    if (responseClosed(res)) return;
-    const status = error.statusCode || 500;
-    sendError(res, status, error.message || "Internal server error", error.details);
-  }
-});
+  });
+}
 
-server.listen(PORT, HOST, () => {
-  console.log(`BQ Studio Emulator listening on http://${HOST}:${PORT}`);
-  console.log(`Proxying targets: ${TARGETS.map(target => `${target.id}=${target.projectId}@${target.emulatorUrl}`).join(", ")}`);
-});
+function startServer() {
+  const server = createServer();
+  server.listen(PORT, HOST, () => {
+    console.log(`BQ Studio Emulator listening on http://${HOST}:${PORT}`);
+    console.log(`Proxying targets: ${TARGETS.map(target => `${target.id}=${target.projectId}@${target.emulatorUrl}`).join(", ")}`);
+  });
+  return server;
+}
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = {
+  createServer,
+  startServer,
+  targetById,
+  visibleDatasets,
+  isGeneratedArtifactDataset,
+  normalizeQueryRows,
+  normalizeQueryValue,
+  splitCsvLine,
+  splitCsvRecords,
+  prepareCsvUpload,
+  inferSchema,
+  parseMultipart,
+  safeIdentifier,
+  safeResourceIdentifier,
+  tableRef
+};

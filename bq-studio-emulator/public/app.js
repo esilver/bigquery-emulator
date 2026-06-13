@@ -625,6 +625,11 @@ function pickCsvHeaderIndex(lines, skipLeadingRows) {
   return requestedIndex;
 }
 
+function isCsvFooterLine(line) {
+  const firstCell = (parseCsvLine(line)[0] || "").trim().toLowerCase();
+  return firstCell === "grand total" || firstCell === "grand total:";
+}
+
 function inferSchemaFromText(text, requestedSkipLeadingRows = 1) {
   const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter(line => line.trim().length > 0);
   if (!lines.length) return { schema: { fields: [] }, skipLeadingRows: 0 };
@@ -637,7 +642,10 @@ function inferSchemaFromText(text, requestedSkipLeadingRows = 1) {
       : headerValues.map((_, index) => `field_${index + 1}`)
   );
   const sampleStart = skipLeadingRows ? headerIndex + 1 : 0;
-  const samples = lines.slice(sampleStart, sampleStart + 100).map(parseCsvLine);
+  const samples = lines
+    .slice(sampleStart, sampleStart + 100)
+    .filter(line => !isCsvFooterLine(line))
+    .map(parseCsvLine);
   return {
     schema: {
       fields: headers.map((name, index) => ({
