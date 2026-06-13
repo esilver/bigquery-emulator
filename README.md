@@ -19,7 +19,7 @@ $ docker run -it -p 9050:9050 -p 9060:9060 ghcr.io/esilver/bigquery-emulator:lat
 $ bq --api http://0.0.0.0:9050 query --project_id=test "SELECT 1"
 ```
 
-The image is published by CI (`docker.yml`) from the `pure-go-duckdb-backend` branch. To build from source instead: `git clone https://github.com/esilver/bigquery-emulator && cd bigquery-emulator && go run ./cmd/bigquery-emulator --project=test`. The original upstream image (SQLite-backed) is `ghcr.io/goccy/bigquery-emulator:latest`.
+The image above is published to GitHub Container Registry by CI. Tagged releases (`v*` pushes) are built by `build.yml` as a single multi-arch manifest (`linux/amd64`, `linux/arm64`). To build from source instead: `git clone https://github.com/esilver/bigquery-emulator && cd bigquery-emulator && go run ./cmd/bigquery-emulator --project=test`. The original upstream image (SQLite-backed) is `ghcr.io/goccy/bigquery-emulator:latest`.
 
 See [Install](#install) for `go install`, prebuilt binaries and packages, and [How to start the standalone server](#how-to-start-the-standalone-server) for the full set of options and client examples.
 
@@ -68,8 +68,11 @@ If Go is installed, you can install the latest version with the following comman
 $ go install github.com/goccy/bigquery-emulator/cmd/bigquery-emulator@latest
 ```
 
-The SQL backend is pure Go, so installation is an ordinary `go install` with
-no native build step.
+Note: this `go install` of the upstream `github.com/goccy/...` path yields the
+SQLite-backed upstream build, not this DuckDB-backed fork. The DuckDB backend is
+wired up via this repo's `replace` directives, so a `go install` by module path
+cannot reach it; build this fork from a checkout (`go build ./cmd/...`) to get
+the DuckDB engine.
 
 You can also download the docker image with the following command
 
