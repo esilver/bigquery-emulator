@@ -1,6 +1,6 @@
 # BigQuery feature support matrix
 
-This document tracks, feature by feature, what [`bigquery-emulator`](https://github.com/goccy/bigquery-emulator) supports.
+This document tracks, feature by feature, what [`bigquery-emulator`](https://github.com/esilver/bigquery-emulator) supports.
 
 BigQuery is a large product, so this matrix is organized to be **MECE** (mutually
 exclusive, collectively exhaustive): every BigQuery feature area appears in
@@ -10,7 +10,7 @@ The top-level grouping follows the structure of the official
 [BigQuery REST API reference](https://docs.cloud.google.com/bigquery/docs/reference/rest).
 
 If a feature you need is missing or wrong here, please open an
-[Issue](https://github.com/goccy/bigquery-emulator/issues).
+[Issue](https://github.com/esilver/bigquery-emulator/issues).
 
 **Legend**
 
@@ -185,11 +185,11 @@ There is no `models.insert` in the BigQuery API — models are created with
 
 ## 6. Query language (GoogleSQL)
 
-Query execution is delegated to [`googlesqlite`](https://github.com/goccy/googlesqlite),
+Query execution is delegated to [`googlesqlite`](https://github.com/esilver/googlesqlite),
 which parses and analyzes [GoogleSQL](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/introduction)
 and runs it against the embedded backend linked into this build. The table below
 records what the **emulator** wires up; the authoritative, per-function and
-per-type matrix lives in the [`googlesqlite` status](https://github.com/goccy/googlesqlite#status).
+per-type matrix lives in the [`googlesqlite` status](https://github.com/esilver/googlesqlite#status).
 
 | Feature | Status | Notes |
 | --- | --- | --- |
