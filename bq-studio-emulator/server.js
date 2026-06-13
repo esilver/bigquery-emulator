@@ -237,7 +237,6 @@ async function runQuery(target, query, options = {}) {
       query,
       useLegacySql: false,
       maxResults: QUERY_MAX_RESULTS,
-      maximumBytesBilled: "50000000000",
       useQueryCache: Boolean(options.useQueryCache)
     })
   });
