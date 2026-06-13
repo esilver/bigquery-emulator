@@ -149,6 +149,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/goccy/googlesqlite => github.com/esilver/googlesqlite v0.0.0-20260613014505-57b729bb9c1d
+replace github.com/goccy/googlesqlite => github.com/esilver/googlesqlite v0.0.0-20260613015236-4106026a4d6d
 
 replace github.com/goccy/go-googlesql => github.com/esilver/go-googlesql v0.2.4-finalizer.1.0.20260611225755-3bdff21371a3
