@@ -4273,6 +4273,104 @@ func TestJobsQueryRegistersJob(t *testing.T) {
 	}
 }
 
+func TestJobsInsertQueryResultsAndStatus(t *testing.T) {
+	const projectID = "test"
+	ctx := context.Background()
+	bqServer, err := server.New(server.TempStorage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bqServer.Load(server.StructSource(types.NewProject(projectID))); err != nil {
+		t.Fatal(err)
+	}
+	testServer := bqServer.TestServer()
+	defer func() {
+		testServer.Close()
+		bqServer.Stop(ctx)
+	}()
+
+	jobsURL := fmt.Sprintf("%s/projects/%s/jobs", testServer.URL, projectID)
+
+	t.Run("paged results", func(t *testing.T) {
+		jobID := "job_insert_paged_results"
+		insertBody := `{"jobReference":{"projectId":"test","jobId":"` + jobID + `"},` +
+			`"configuration":{"query":{"query":"SELECT n FROM UNNEST([10,20,30]) AS n ORDER BY n",` +
+			`"useLegacySql":false}}}`
+		code, body := httpJSON(t, http.MethodPost, jobsURL, insertBody, nil)
+		if code != http.StatusOK {
+			t.Fatalf("jobs.insert: expected 200, got %d (%v)", code, body)
+		}
+		status, _ := body["status"].(map[string]any)
+		if status["errorResult"] != nil {
+			t.Fatalf("jobs.insert returned error status: %v", status)
+		}
+
+		resultsURL := fmt.Sprintf("%s/projects/%s/queries/%s", testServer.URL, projectID, jobID)
+		code, body = httpJSON(t, http.MethodGet, resultsURL+"?maxResults=0", "", nil)
+		if code != http.StatusOK {
+			t.Fatalf("getQueryResults maxResults=0: expected 200, got %d (%v)", code, body)
+		}
+		if got := len(queryRows(t, body)); got != 0 {
+			t.Fatalf("maxResults=0 returned %d rows; want 0", got)
+		}
+		if body["pageToken"] != nil && body["pageToken"] != "" {
+			t.Fatalf("maxResults=0 returned pageToken %v; want empty", body["pageToken"])
+		}
+
+		code, body = httpJSON(t, http.MethodGet, resultsURL+"?maxResults=2", "", nil)
+		if code != http.StatusOK {
+			t.Fatalf("getQueryResults first page: expected 200, got %d (%v)", code, body)
+		}
+		if rows := queryRows(t, body); fmt.Sprint(rows) != "[[10] [20]]" {
+			t.Fatalf("first page rows = %v; want [[10] [20]]", rows)
+		}
+		token, _ := body["pageToken"].(string)
+		if token == "" {
+			t.Fatalf("first page did not include a pageToken: %v", body)
+		}
+
+		code, body = httpJSON(t, http.MethodGet, resultsURL+"?pageToken="+url.QueryEscape(token)+"&maxResults=2", "", nil)
+		if code != http.StatusOK {
+			t.Fatalf("getQueryResults second page: expected 200, got %d (%v)", code, body)
+		}
+		if rows := queryRows(t, body); fmt.Sprint(rows) != "[[30]]" {
+			t.Fatalf("second page rows = %v; want [[30]]", rows)
+		}
+		if body["pageToken"] != nil && body["pageToken"] != "" {
+			t.Fatalf("last page returned pageToken %v; want empty", body["pageToken"])
+		}
+	})
+
+	t.Run("failed job status", func(t *testing.T) {
+		jobID := "job_insert_failed_status"
+		insertBody := `{"jobReference":{"projectId":"test","jobId":"` + jobID + `"},` +
+			`"configuration":{"query":{"query":"SELECT * FROM missing_dataset.missing_table",` +
+			`"useLegacySql":false}}}`
+		code, body := httpJSON(t, http.MethodPost, jobsURL, insertBody, nil)
+		if code != http.StatusOK {
+			t.Fatalf("jobs.insert failed query: expected 200 job resource, got %d (%v)", code, body)
+		}
+		status, _ := body["status"].(map[string]any)
+		if status["errorResult"] == nil {
+			t.Fatalf("jobs.insert failed query missing status.errorResult: %v", body)
+		}
+
+		code, body = httpJSON(t, http.MethodGet,
+			fmt.Sprintf("%s/projects/%s/jobs/%s", testServer.URL, projectID, jobID),
+			"", nil)
+		if code != http.StatusOK {
+			t.Fatalf("jobs.get failed query: expected 200, got %d (%v)", code, body)
+		}
+		status, _ = body["status"].(map[string]any)
+		if status["errorResult"] == nil {
+			t.Fatalf("jobs.get dropped status.errorResult: %v", body)
+		}
+		if status["state"] != "DONE" {
+			t.Fatalf("jobs.get status.state = %v; want DONE", status["state"])
+		}
+	})
+}
+
 // TestExportDataStatement is a regression test for
 // https://github.com/goccy/bigquery-emulator/issues/418: an `EXPORT DATA
 // OPTIONS(...) AS <query>` statement must materialize the inner query's
