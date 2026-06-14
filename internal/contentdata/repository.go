@@ -17,7 +17,7 @@ import (
 
 	"github.com/goccy/bigquery-emulator/internal/connection"
 	"github.com/goccy/bigquery-emulator/internal/logger"
-	internaltypes "github.com/goccy/bigquery-emulator/internal/types"
+	"github.com/goccy/bigquery-emulator/internal/sqlvalues"
 	"github.com/goccy/bigquery-emulator/types"
 )
 
@@ -181,7 +181,7 @@ func (r *Repository) encodeSchemaField(field *bigqueryv2.TableFieldSchema) strin
 	return elem
 }
 
-func (r *Repository) Query(ctx context.Context, tx *connection.Tx, projectID, datasetID, query string, params []*bigqueryv2.QueryParameter) (*internaltypes.QueryResponse, error) {
+func (r *Repository) Query(ctx context.Context, tx *connection.Tx, projectID, datasetID, query string, params []*bigqueryv2.QueryParameter) (*sqlvalues.QueryResponse, error) {
 	tx.SetProjectAndDataset(projectID, datasetID)
 	if err := tx.ContentRepoMode(); err != nil {
 		return nil, err
@@ -235,7 +235,7 @@ func (r *Repository) Query(ctx context.Context, tx *connection.Tx, projectID, da
 	if err != nil {
 		return nil, fmt.Errorf("failed to get column types: %w", err)
 	}
-	tableRows := []*internaltypes.TableRow{}
+	tableRows := []*sqlvalues.TableRow{}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get column types: %w", err)
 	}
@@ -263,7 +263,7 @@ func (r *Repository) Query(ctx context.Context, tx *connection.Tx, projectID, da
 		if err := rows.Err(); err != nil {
 			return nil, fmt.Errorf("failed to execute query: %w", err)
 		}
-		cells := make([]*internaltypes.TableCell, 0, len(values))
+		cells := make([]*sqlvalues.TableCell, 0, len(values))
 		resultValues := make([]interface{}, 0, len(values))
 		for idx, value := range values {
 			v := reflect.ValueOf(value).Elem().Interface()
@@ -281,7 +281,7 @@ func (r *Repository) Query(ctx context.Context, tx *connection.Tx, projectID, da
 			resultValues = append(resultValues, v)
 		}
 		result = append(result, resultValues)
-		tableRows = append(tableRows, &internaltypes.TableRow{
+		tableRows = append(tableRows, &sqlvalues.TableRow{
 			F: cells,
 		})
 	}
@@ -289,7 +289,7 @@ func (r *Repository) Query(ctx context.Context, tx *connection.Tx, projectID, da
 		return nil, fmt.Errorf("failed to scan rows: %w", err)
 	}
 	logger.Logger(ctx).Debug("query result", zap.Any("rows", result))
-	return &internaltypes.QueryResponse{
+	return &sqlvalues.QueryResponse{
 		Schema: &bigqueryv2.TableSchema{
 			Fields: fields,
 		},
@@ -477,9 +477,9 @@ func (r *Repository) queryParameterValueToGoValue(ptype *bigqueryv2.QueryParamet
 // them off the BigQuery schema instead. A STRUCT value arrives as a
 // reflect.Slice with reflect.Interface element kind, indistinguishable
 // from ARRAY at the value level; only the column schema tells them apart.
-func (r *Repository) convertValueToCell(value interface{}, schema *bigqueryv2.TableFieldSchema) (*internaltypes.TableCell, error) {
+func (r *Repository) convertValueToCell(value interface{}, schema *bigqueryv2.TableFieldSchema) (*sqlvalues.TableCell, error) {
 	if value == nil {
-		return &internaltypes.TableCell{V: nil}, nil
+		return &sqlvalues.TableCell{V: nil}, nil
 	}
 
 	// REPEATED — the value is an ARRAY at this level. Strip the
@@ -489,11 +489,11 @@ func (r *Repository) convertValueToCell(value interface{}, schema *bigqueryv2.Ta
 		kind := rv.Type().Kind()
 		if kind != reflect.Slice && kind != reflect.Array {
 			v := fmt.Sprint(value)
-			return &internaltypes.TableCell{V: v, Bytes: int64(len(v))}, nil
+			return &sqlvalues.TableCell{V: v, Bytes: int64(len(v))}, nil
 		}
 		elemSchema := *schema
 		elemSchema.Mode = string(types.NullableMode)
-		cells := []*internaltypes.TableCell{}
+		cells := []*sqlvalues.TableCell{}
 		var totalBytes int64
 		for i := 0; i < rv.Len(); i++ {
 			cell, err := r.convertValueToCell(rv.Index(i).Interface(), &elemSchema)
@@ -503,7 +503,7 @@ func (r *Repository) convertValueToCell(value interface{}, schema *bigqueryv2.Ta
 			totalBytes += cell.Bytes
 			cells = append(cells, cell)
 		}
-		return &internaltypes.TableCell{V: cells, Bytes: totalBytes}, nil
+		return &sqlvalues.TableCell{V: cells, Bytes: totalBytes}, nil
 	}
 
 	// RECORD (= STRUCT) at this level. googlesqlite returns a positional
@@ -513,9 +513,9 @@ func (r *Repository) convertValueToCell(value interface{}, schema *bigqueryv2.Ta
 		kind := rv.Type().Kind()
 		if kind != reflect.Slice && kind != reflect.Array {
 			v := fmt.Sprint(value)
-			return &internaltypes.TableCell{V: v, Bytes: int64(len(v))}, nil
+			return &sqlvalues.TableCell{V: v, Bytes: int64(len(v))}, nil
 		}
-		cells := []*internaltypes.TableCell{}
+		cells := []*sqlvalues.TableCell{}
 		var totalBytes int64
 		for i := 0; i < rv.Len(); i++ {
 			var fieldSchema *bigqueryv2.TableFieldSchema
@@ -532,13 +532,13 @@ func (r *Repository) convertValueToCell(value interface{}, schema *bigqueryv2.Ta
 			totalBytes += cell.Bytes
 			cells = append(cells, cell)
 		}
-		return &internaltypes.TableCell{V: internaltypes.TableRow{F: cells}, Bytes: totalBytes}, nil
+		return &sqlvalues.TableCell{V: sqlvalues.TableRow{F: cells}, Bytes: totalBytes}, nil
 	}
 
 	// Scalar. Render via fmt.Sprint — matches the legacy behaviour
 	// for non-RECORD, non-REPEATED columns.
 	v := fmt.Sprint(value)
-	return &internaltypes.TableCell{V: v, Bytes: int64(len(v))}, nil
+	return &sqlvalues.TableCell{V: v, Bytes: int64(len(v))}, nil
 }
 
 func (r *Repository) CreateOrReplaceTable(ctx context.Context, tx *connection.Tx, projectID, datasetID string, table *types.Table) error {
