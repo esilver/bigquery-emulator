@@ -7,113 +7,88 @@
 [![GoDoc](https://godoc.org/github.com/goccy/bigquery-emulator?status.svg)](https://pkg.go.dev/github.com/goccy/bigquery-emulator?tab=doc)
 [![Sponsor goccy](https://img.shields.io/badge/Sponsor%20goccy-%E2%9D%A4-db61a2)](https://github.com/sponsors/goccy)
 
-
-The only open-source emulator for Google BigQuery — run a BigQuery-compatible server on your local machine for testing and development, with no cloud project or credentials required.
+The only open-source emulator for Google BigQuery: a BigQuery-compatible server you run locally for testing and development, with no cloud project or credentials. Pure Go, no cgo, no C toolchain, no wasm runtime. The SQL engine is [googlesqlite](https://github.com/esilver/googlesqlite) - GoogleSQL on a pure-Go DuckDB backend, both transpiled from WebAssembly to Go ahead of time via [wasm2go](https://github.com/ncruces/wasm2go).
 
 # Quick start
 
-Run this fork (DuckDB-backed, pure-Go) from its prebuilt image. The image
-bundles a tiny sample dataset at `/work/sample.yaml`, so passing
-`--data-from-yaml` gives you a real table to query right away:
+The prebuilt image bundles a sample dataset at `/work/sample.yaml`, so `--data-from-yaml` gives you a table to query right away:
 
 ```console
 $ docker run -it -p 9050:9050 -p 9060:9060 ghcr.io/esilver/bigquery-emulator:latest --project=test --data-from-yaml=/work/sample.yaml
 $ bq --api http://0.0.0.0:9050 query --project_id=test "SELECT id, name FROM dataset1.table_a ORDER BY id"
 ```
 
-The `bq` step needs the [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) on your `PATH`. To stay CLI-free, point any BigQuery client library at `http://0.0.0.0:9050` instead (see the [Python](#how-to-use-from-python-client) and [Go](#synopsis) examples below).
+The `bq` step needs the [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) on your `PATH`. To stay CLI-free, point any BigQuery client library at `http://0.0.0.0:9050` (see the [Python](#how-to-use-from-python-client) and [Go](#synopsis) examples). On Apple Silicon, add `--platform linux/x86_64` if `docker run` warns about the image platform.
 
-On an Apple Silicon Mac the `docker run` may warn about the image platform. Add `--platform linux/x86_64` to the `docker run` line if so.
-
-The image above is published to GitHub Container Registry by CI. Tagged releases (`v*` pushes) are built by `build.yml` as a single multi-arch manifest (`linux/amd64`, `linux/arm64`). To build from source instead: `git clone https://github.com/esilver/bigquery-emulator && cd bigquery-emulator && go run ./cmd/bigquery-emulator --project=test`. The original upstream image (SQLite-backed) is `ghcr.io/goccy/bigquery-emulator:latest`.
-
-See [Install](#install) for `go install`, prebuilt binaries and packages, and [How to start the standalone server](#how-to-start-the-standalone-server) for the full set of options and client examples.
+See [Install](#install) for `go install`, prebuilt binaries, packages, and image details, and [How to start the standalone server](#how-to-start-the-standalone-server) for the full option set.
 
 # Features
 
-- From Go, run the emulator in-process via [httptest](https://pkg.go.dev/net/http/httptest), so tests need no separate server.
-- For any other language or the [bq](https://cloud.google.com/bigquery/docs/bq-command-line-tool) CLI, run it as a standalone static single binary and point the client at its address.
-- Storage and query execution run on an embedded `googlesqlite` engine. This fork links the DuckDB-backed build by default, with the upstream SQLite-backed build available for side-by-side comparison in BQ Studio.
-- Seed data from a YAML file on startup.
+- **In-process Go tests** - run the emulator via [httptest](https://pkg.go.dev/net/http/httptest), no separate server ([synopsis](#synopsis)).
+- **Any other client** - run the static single binary and point the [bq](https://cloud.google.com/bigquery/docs/bq-command-line-tool) CLI or any BigQuery client library at its address.
+- **DuckDB-backed `googlesqlite` engine** - storage and query execution. The upstream SQLite-backed build stays available for side-by-side comparison in [BQ Studio](#bq-studio-workbench).
+- **YAML seed loader** - load initial data on startup with `--data-from-yaml`.
 
 # Status
 
-This project is still in **beta**, but a large part of BigQuery already works from the official client libraries. The multi-client conformance suite ([`test/e2e`](https://github.com/esilver/bigquery-emulator/tree/main/test/e2e)) exercises the official Python, Ruby, PHP, Node.js and Java client libraries plus the `bq` CLI against the emulator over a shared query corpus, and currently passes for every client.
+**Beta**, but a large part of BigQuery already works from the official client libraries. The multi-client conformance suite ([`test/e2e`](https://github.com/esilver/bigquery-emulator/tree/main/test/e2e)) runs the official Python, Ruby, PHP, Node.js, and Java clients plus the `bq` CLI over a shared query corpus, and passes for every client.
 
-BigQuery is a large product, so the emulator's coverage is tracked feature by feature in a single MECE (mutually exclusive, collectively exhaustive) matrix. This keeps the README concise and gives you one authoritative place to check support:
+**Is my workload covered?** Coverage is tracked feature by feature in a single MECE (mutually exclusive, collectively exhaustive) matrix, so check two places:
 
-### 📋 [BigQuery feature support matrix](./docs/feature-support.md)
-
-At a glance, the emulator supports dataset / table / job / tabledata management, GoogleSQL query execution, batch load and extract jobs (including loads from Google Cloud Storage), streaming inserts, the gRPC BigQuery Storage read/write APIs, external tables, and logical and materialized views. IAM policy management, row access policies, copy jobs, table snapshots and BigQuery ML are not implemented yet. See the matrix for the complete, categorized breakdown.
-
-**Is my workload covered?** Check two places: the [feature support matrix](./docs/feature-support.md) for API-level features (the unsupported set is IAM, row access policies, copy jobs, table snapshots, and BigQuery ML), and the [googlesqlite status](https://github.com/esilver/googlesqlite#status) for per-function and per-type SQL coverage.
+- **[BigQuery feature support matrix](./docs/feature-support.md)** for API-level features. Supported: dataset / table / job / tabledata management, GoogleSQL queries, load and extract jobs (including from Google Cloud Storage), streaming inserts, the gRPC Storage read/write APIs, external tables, and logical and materialized views. Not yet: IAM, row access policies, copy jobs, table snapshots, and BigQuery ML.
+- **[googlesqlite status](https://github.com/esilver/googlesqlite#status)** for per-function and per-type SQL coverage, which stays current as the engine evolves.
 
 ## GoogleSQL
 
-Query execution is powered by [googlesqlite](https://github.com/esilver/googlesqlite), which implements GoogleSQL on top of an embedded local SQL engine. This fork links the DuckDB-backed googlesqlite build by default, with the upstream SQLite-backed emulator kept available for side-by-side comparison in BQ Studio. The exact function/type coverage lives in googlesqlite's generated spec matrix, which stays current as that engine evolves. Beyond functions, it also supports:
-
-- Wildcard tables
-- Templated-argument functions
-- JavaScript UDF
-
-For the authoritative, per-function and per-type support matrix, see the [googlesqlite status](https://github.com/esilver/googlesqlite#status).
+Query execution runs on [googlesqlite](https://github.com/esilver/googlesqlite). Beyond the per-function coverage in its [status matrix](https://github.com/esilver/googlesqlite#status), the emulator wires up wildcard tables, templated-argument functions, and JavaScript UDFs.
 
 ## Benchmarks
 
-The emulator runs the standard analytics benchmark suites against the DuckDB-backed engine:
+Standard analytics suites against the DuckDB-backed engine:
 
-- **TPC-H**: all 22 queries execute end to end on scale factor 0.1.
-- **ClickBench**: 41 of the 43 queries analyze successfully. The 2 remaining queries use genuine BigQuery-specific dialect that BigQuery itself rejects, so the emulator matches BigQuery's behavior by rejecting them too.
+- **TPC-H** - all 22 queries run end to end at scale factor 0.1.
+- **ClickBench** - 41 of 43 queries analyze. The other 2 use BigQuery-specific dialect that BigQuery itself rejects, so the emulator rejects them too.
 
 Larger scale factors stream through the load path, so corpus size scales with available disk.
 
 # BQ Studio workbench
 
-[`bq-studio-emulator/`](./bq-studio-emulator/) is a local BigQuery Studio-style workbench that fronts both this DuckDB-backed fork and the upstream SQLite-backed build at the same time. It offers a dataset explorer, a SQL editor with a results grid, a CSV loader, and a benchmark tab, with a backend switch in the top bar so you can run the same query against either engine and compare results and timings. `cd bq-studio-emulator && docker compose up` brings up both emulators plus the UI with a shared sample dataset, then open `http://127.0.0.1:5177`. See its [README](./bq-studio-emulator/README.md) for the manual path and the TPC-H, ClickBench, and NYC Taxi sample loaders.
-
-# Goals
-
-The goal of this project is to build a server that behaves exactly like BigQuery from the BigQuery client's perspective. To do so, we need to support all features present in BigQuery ( Model API / Connection API / INFORMATION SCHEMA etc.. ) in addition to evaluating GoogleSQL.
+[`bq-studio-emulator/`](./bq-studio-emulator/) is a local BigQuery Studio-style UI that fronts both this DuckDB-backed fork and the upstream SQLite-backed build at once: dataset explorer, SQL editor with results grid, CSV loader, and a benchmark tab, with a top-bar backend switch to run the same query against either engine and compare results and timings. Run `cd bq-studio-emulator && docker compose up` (both emulators, the UI, and a shared sample dataset), then open `http://127.0.0.1:5177`. Its [README](./bq-studio-emulator/README.md) covers the manual path and the TPC-H, ClickBench, and NYC Taxi loaders.
 
 # Sponsorship
 
-`bigquery-emulator` was created and is maintained by [@goccy](https://github.com/goccy) (Masaaki Goshima), who built the only open-source BigQuery emulator to fill a long-standing gap (Google's emulator request, [issue 129248927](https://issuetracker.google.com/issues/129248927), has sat open for years). This repository is a fork that swaps the SQL backend to DuckDB and runs pure-Go; all of the upstream emulator work it builds on is goccy's.
+`bigquery-emulator` was created and is maintained by [@goccy](https://github.com/goccy) (Masaaki Goshima), who built the only open-source BigQuery emulator to fill a long-standing gap (Google's [emulator request](https://issuetracker.google.com/issues/129248927) has sat open for years). This repository forks that work to swap the SQL backend to DuckDB and run pure-Go. All of the upstream emulator work it builds on is goccy's.
 
-If this project saves you time, please consider sponsoring the upstream author: <https://github.com/sponsors/goccy>.
+If this project saves you time, please sponsor the upstream author: <https://github.com/sponsors/goccy>.
 
 # Install
 
-If Go is installed, you can install the latest version with the following command
+**Docker image** - a multi-arch manifest, so the same tag works on `linux/amd64` and `linux/arm64`:
+
+```console
+$ docker pull ghcr.io/esilver/bigquery-emulator:latest
+```
+
+CI builds and publishes this image, and tagged releases (`v*`) are built by `build.yml`. The upstream image (SQLite-backed) is `ghcr.io/goccy/bigquery-emulator:latest`.
+
+**Prebuilt binaries and packages** - darwin/linux/windows, amd64/arm64, plus `deb`/`rpm`/`apk`, from [releases](https://github.com/esilver/bigquery-emulator/releases).
+
+**`go install`** - works, but yields the SQLite-backed upstream build, not this fork:
 
 ```console
 $ go install github.com/goccy/bigquery-emulator/cmd/bigquery-emulator@latest
 ```
 
-Note: this `go install` of the upstream `github.com/goccy/...` path yields the
-SQLite-backed upstream build, not this fork. The DuckDB backend is wired up
-through `replace` directives that a module-path install cannot reach, so to get
-it either build from a checkout (`git clone https://github.com/esilver/bigquery-emulator && cd bigquery-emulator && go build ./cmd/...`)
-or, to import this fork from your own module, keep the `github.com/goccy/...`
-import paths and add the same two redirects this repo's `go.mod` uses:
+The DuckDB backend is wired through `replace` directives a module-path install cannot reach. To get it, either build from a checkout (`git clone https://github.com/esilver/bigquery-emulator && cd bigquery-emulator && go build ./cmd/...`), or, to import this fork from your own module, keep the `github.com/goccy/...` import paths and add the same two redirects this repo's `go.mod` uses:
 
 ```
 replace github.com/goccy/googlesqlite => github.com/esilver/googlesqlite v0.0.0-20260613063153-f7765896e410
 replace github.com/goccy/go-googlesql => github.com/esilver/go-googlesql v0.2.4-finalizer.1.0.20260611225755-3bdff21371a3
 ```
 
-(These are the pins this repo's `go.mod` uses today. Match them to the `go.mod` in the checkout you build against, since they advance over time.)
+These pins advance over time, so match them to the `go.mod` in the checkout you build against.
 
-You can also download the docker image with the following command
-
-```console
-$ docker pull ghcr.io/esilver/bigquery-emulator:latest
-```
-
-The image is a multi-arch manifest, so the same tag works on both `linux/amd64` and `linux/arm64`.
-
-You can also download prebuilt binaries (darwin/linux/windows, amd64/arm64) and `deb`/`rpm`/`apk` packages directly from [releases](https://github.com/esilver/bigquery-emulator/releases).
-
-Both the release archives and the container image ship a signed [GitHub build-provenance attestation](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds). Verify them with the GitHub CLI:
+**Verifying provenance** - the release archives and the container image ship a signed [GitHub build-provenance attestation](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds). Verify with the GitHub CLI:
 
 ```console
 # release archive
@@ -125,7 +100,7 @@ $ gh attestation verify oci://ghcr.io/esilver/bigquery-emulator:latest --repo es
 
 # How to start the standalone server
 
-If you can install the `bigquery-emulator` CLI, you can start the server using the following options.
+The `bigquery-emulator` CLI takes the following options.
 
 ```console
 $ ./bigquery-emulator -h
@@ -150,21 +125,17 @@ Help Options:
   -h, --help            Show this help message
 ```
 
-Start the server by specifying the project name
+Start it with a project name, from a binary or the image:
 
 ```console
 $ ./bigquery-emulator --project=test
 [bigquery-emulator] REST server listening at 0.0.0.0:9050
 [bigquery-emulator] gRPC server listening at 0.0.0.0:9060
-```
 
-If you want to use docker image to start emulator, specify like the following.
-
-```console
 $ docker run -it -p 9050:9050 -p 9060:9060 ghcr.io/esilver/bigquery-emulator:latest --project=test
 ```
 
-* If you are using an M1 Mac ( and Docker Desktop ) you may get a warning. In that case please use `--platform linux/x86_64` option.
+On an M1 Mac with Docker Desktop you may get a platform warning. Add `--platform linux/x86_64`.
 
 ## How to use from bq client
 
@@ -202,7 +173,7 @@ $ ./bigquery-emulator --project=test --dataset=dataset1
 
 ### 2. Call endpoint from python client
 
-Create ClientOptions with api_endpoint option and use AnonymousCredentials to disable authentication.
+Set `api_endpoint` on `ClientOptions` and pass `AnonymousCredentials` to disable auth.
 
 ```python
 from google.api_core.client_options import ClientOptions
@@ -219,11 +190,7 @@ client = bigquery.Client(
 client.query(query="...", job_config=QueryJobConfig())
 ```
 
-If you use a DataFrame as the download destination for the query results,
-You must either disable the BigQueryStorage client with `create_bqstorage_client=False` or
-create a BigQueryStorage client that references the local grpc port (default 9060).
-
-https://cloud.google.com/bigquery/docs/samples/bigquery-query-results-dataframe?hl=en
+To download results into a DataFrame, either disable the BigQuery Storage client with `create_bqstorage_client=False`, or point one at the local gRPC port (default 9060). See [query results to DataFrame](https://cloud.google.com/bigquery/docs/samples/bigquery-query-results-dataframe?hl=en).
 
 ```python
 result = client.query(sql).to_dataframe(create_bqstorage_client=False)
@@ -241,12 +208,9 @@ result = client.query(sql).to_dataframe(bqstorage_client=read_client)
 
 # Synopsis
 
-If you use the Go language as a BigQuery client, you can launch the BigQuery emulator on the same process as the testing process.  
-Please imports `github.com/goccy/bigquery-emulator/server` ( and `github.com/goccy/bigquery-emulator/types` ) and you can use `server.New` API to create the emulator server instance.
+From a Go test, run the emulator in the test process itself. Import `github.com/goccy/bigquery-emulator/server` (and `.../types`) and call `server.New` to create the instance. Full API reference: <https://pkg.go.dev/github.com/goccy/bigquery-emulator>.
 
-See the API reference for more information: https://pkg.go.dev/github.com/goccy/bigquery-emulator
-
-The `github.com/goccy/...` import paths below are correct, but a test module that wants the DuckDB-backed engine still needs the two `replace` directives from [Install](#install) in its own `go.mod`. Without them the imports resolve to the SQLite-backed upstream.
+The `github.com/goccy/...` import paths below are correct, but a module that wants the DuckDB-backed engine still needs the two `replace` directives from [Install](#install) in its own `go.mod`. Without them the imports resolve to the SQLite-backed upstream.
 
 ```go
 package main
@@ -346,30 +310,25 @@ SELECT %s([
 
 # Debugging
 
-If you have specified a database file when starting `bigquery-emulator`, inspect it with the tooling for the linked backend. SQLite-backed builds produce ordinary SQLite files; DuckDB-backed builds produce DuckDB database files.
+If you started `bigquery-emulator` with a database file, inspect it with the tooling for the linked backend. SQLite-backed builds produce ordinary SQLite files, DuckDB-backed builds produce DuckDB database files.
 
 # How it works
 
-## BigQuery Emulator Architecture Overview
+## Architecture overview
 
-After receiving a GoogleSQL query via the REST API from bq or a client SDK, the googlesqlite driver parses and analyzes the query using [go-googlesql](https://github.com/esilver/go-googlesql), then lowers and executes it against the embedded backend linked into this build.
+A GoogleSQL query arrives over the REST API from `bq` or a client SDK. The googlesqlite driver parses and analyzes it with [go-googlesql](https://github.com/esilver/go-googlesql), then lowers and executes it against the embedded backend linked into the build.
 
 <img width="600px" src="https://user-images.githubusercontent.com/209884/196145011-e35c2df4-5f5d-43ce-b7df-08cd130b5d31.png"></img>
 
+## Type conversion flow
 
-
-## Type Conversion Flow
-
-BigQuery has a number of types that do not map 1:1 to local SQL engines, such as ARRAY and STRUCT. googlesqlite owns the backend-specific encoding, decoding, and native-value bridge needed to preserve those values through query execution.
+BigQuery types like ARRAY and STRUCT do not map 1:1 to local SQL engines. googlesqlite owns the backend-specific encoding, decoding, and native-value bridge that preserve those values through execution.
 
 <img width="600px" src="https://user-images.githubusercontent.com/209884/196145033-aa032878-7e01-4ec7-9a23-b174b87e1a24.png"></img>
 
-
 # Reference
 
-Regarding the story of bigquery-emulator, there are the following articles.
-- [How to create a BigQuery Emulator](https://docs.google.com/presentation/d/1j5TPCpXiE9CvBjq78W8BWz-cGxU8djW1qy9Y6eBHso8/edit?usp=sharing) ( Japanese )
-
+- [How to create a BigQuery Emulator](https://docs.google.com/presentation/d/1j5TPCpXiE9CvBjq78W8BWz-cGxU8djW1qy9Y6eBHso8/edit?usp=sharing) (Japanese) - the story behind the upstream project.
 
 # License
 
