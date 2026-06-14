@@ -1,9 +1,9 @@
-// Package zsqltypes provides a minimal pure-Go TypeKind enum for the
+// Package gsqltypes provides a minimal pure-Go TypeKind enum for the
 // bigquery-emulator codebase. Its constants use the BigQuery type names
 // (INT64 etc.), and their numeric values track the googlesql.TypeKind enum
 // exposed by the googlesqlite driver, so a `*googlesqlite.ColumnType.Kind`
 // can be cast directly to TypeKind.
-package zsqltypes
+package gsqltypes
 
 // TypeKind matches googlesql.TypeKind integer values.
 type TypeKind int
@@ -11,29 +11,31 @@ type TypeKind int
 const (
 	TYPE_UNKNOWN TypeKind = 0
 
-	INT32     TypeKind = 2
-	INT64     TypeKind = 3
-	UINT32    TypeKind = 4
-	UINT64    TypeKind = 5
-	BOOL      TypeKind = 6
-	FLOAT     TypeKind = 7
-	DOUBLE    TypeKind = 8
-	STRING    TypeKind = 9
-	BYTES     TypeKind = 10
-	DATE      TypeKind = 11
-	ENUM      TypeKind = 16
-	ARRAY     TypeKind = 17
-	STRUCT    TypeKind = 18
-	PROTO     TypeKind = 19
-	TIMESTAMP TypeKind = 20
-	TIME      TypeKind = 21
-	DATETIME  TypeKind = 22
-	GEOGRAPHY TypeKind = 23
-	NUMERIC   TypeKind = 24
-	BIG_NUMERIC TypeKind = 25
-	EXTENDED  TypeKind = 26
-	JSON      TypeKind = 27
-	INTERVAL  TypeKind = 28
+	INT32      TypeKind = 2
+	INT64      TypeKind = 3
+	UINT32     TypeKind = 4
+	UINT64     TypeKind = 5
+	BOOL       TypeKind = 6
+	FLOAT      TypeKind = 7
+	DOUBLE     TypeKind = 8
+	STRING     TypeKind = 9
+	BYTES      TypeKind = 10
+	DATE       TypeKind = 11
+	ENUM       TypeKind = 16
+	ARRAY      TypeKind = 17
+	STRUCT     TypeKind = 18
+	PROTO      TypeKind = 19
+	TIMESTAMP  TypeKind = 20
+	TIME       TypeKind = 21
+	DATETIME   TypeKind = 22
+	GEOGRAPHY  TypeKind = 23
+	NUMERIC    TypeKind = 24
+	BIGNUMERIC TypeKind = 25
+	// EXTENDED has no String() case and renders as TYPE_UNKNOWN because the
+	// emulator does not support googlesql extended types.
+	EXTENDED TypeKind = 26
+	JSON     TypeKind = 27
+	INTERVAL TypeKind = 28
 )
 
 func (k TypeKind) String() string {
@@ -76,8 +78,8 @@ func (k TypeKind) String() string {
 		return "GEOGRAPHY"
 	case NUMERIC:
 		return "NUMERIC"
-	case BIG_NUMERIC:
-		return "BIG_NUMERIC"
+	case BIGNUMERIC:
+		return "BIGNUMERIC"
 	case JSON:
 		return "JSON"
 	case INTERVAL:

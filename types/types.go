@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/bigquery"
-	"github.com/goccy/bigquery-emulator/internal/zsqltypes"
+	"github.com/goccy/bigquery-emulator/internal/gsqltypes"
 	"github.com/goccy/go-json"
 	"github.com/goccy/googlesqlite"
 	bigqueryv2 "google.golang.org/api/bigquery/v2"
@@ -95,7 +95,7 @@ type Column struct {
 
 func (c *Column) FormatType() string {
 	var typ string
-	if c.Type.TypeKind() == zsqltypes.STRUCT {
+	if c.Type.TypeKind() == gsqltypes.STRUCT {
 		formatTypes := make([]string, 0, len(c.Fields))
 		for _, field := range c.Fields {
 			formatTypes = append(formatTypes, fmt.Sprintf("`%s` %s", field.Name, field.FormatType()))
@@ -154,113 +154,113 @@ type Routine struct {
 type Type string
 
 func TypeFromKind(kind int) Type {
-	switch zsqltypes.TypeKind(kind) {
-	case zsqltypes.INT32:
+	switch gsqltypes.TypeKind(kind) {
+	case gsqltypes.INT32:
 		return INT64
-	case zsqltypes.INT64:
+	case gsqltypes.INT64:
 		return INT64
-	case zsqltypes.UINT32:
+	case gsqltypes.UINT32:
 		return INT64
-	case zsqltypes.UINT64:
+	case gsqltypes.UINT64:
 		return INT64
-	case zsqltypes.BOOL:
+	case gsqltypes.BOOL:
 		return BOOL
-	case zsqltypes.FLOAT:
+	case gsqltypes.FLOAT:
 		return FLOAT
-	case zsqltypes.DOUBLE:
+	case gsqltypes.DOUBLE:
 		return FLOAT64
-	case zsqltypes.STRING:
+	case gsqltypes.STRING:
 		return STRING
-	case zsqltypes.BYTES:
+	case gsqltypes.BYTES:
 		return BYTES
-	case zsqltypes.DATE:
+	case gsqltypes.DATE:
 		return DATE
-	case zsqltypes.TIMESTAMP:
+	case gsqltypes.TIMESTAMP:
 		return TIMESTAMP
-	case zsqltypes.ENUM:
+	case gsqltypes.ENUM:
 		return INT64
-	case zsqltypes.ARRAY:
+	case gsqltypes.ARRAY:
 		return ARRAY
-	case zsqltypes.STRUCT:
+	case gsqltypes.STRUCT:
 		return STRUCT
-	case zsqltypes.TIME:
+	case gsqltypes.TIME:
 		return TIME
-	case zsqltypes.DATETIME:
+	case gsqltypes.DATETIME:
 		return DATETIME
-	case zsqltypes.GEOGRAPHY:
+	case gsqltypes.GEOGRAPHY:
 		return GEOGRAPHY
-	case zsqltypes.NUMERIC:
+	case gsqltypes.NUMERIC:
 		return NUMERIC
-	case zsqltypes.BIG_NUMERIC:
+	case gsqltypes.BIGNUMERIC:
 		return BIGNUMERIC
-	case zsqltypes.JSON:
+	case gsqltypes.JSON:
 		return JSON
-	case zsqltypes.INTERVAL:
+	case gsqltypes.INTERVAL:
 		return INTERVAL
 	}
 	return ""
 }
 
-func (t Type) TypeKind() zsqltypes.TypeKind {
+func (t Type) TypeKind() gsqltypes.TypeKind {
 	switch t {
 	case INT64:
-		return zsqltypes.INT64
+		return gsqltypes.INT64
 	case INT:
-		return zsqltypes.INT64
+		return gsqltypes.INT64
 	case SMALLINT:
-		return zsqltypes.INT64
+		return gsqltypes.INT64
 	case INTEGER:
-		return zsqltypes.INT64
+		return gsqltypes.INT64
 	case BIGINT:
-		return zsqltypes.INT64
+		return gsqltypes.INT64
 	case TINYINT:
-		return zsqltypes.INT64
+		return gsqltypes.INT64
 	case BYTEINT:
-		return zsqltypes.INT64
+		return gsqltypes.INT64
 	case NUMERIC:
-		return zsqltypes.NUMERIC
+		return gsqltypes.NUMERIC
 	case BIGNUMERIC:
-		return zsqltypes.BIG_NUMERIC
+		return gsqltypes.BIGNUMERIC
 	case DECIMAL:
-		return zsqltypes.NUMERIC
+		return gsqltypes.NUMERIC
 	case BIGDECIMAL:
-		return zsqltypes.BIG_NUMERIC
+		return gsqltypes.BIGNUMERIC
 	case FLOAT:
-		return zsqltypes.FLOAT
+		return gsqltypes.FLOAT
 	case FLOAT64:
-		return zsqltypes.DOUBLE
+		return gsqltypes.DOUBLE
 	case DOUBLE:
-		return zsqltypes.DOUBLE
+		return gsqltypes.DOUBLE
 	case BOOLEAN:
-		return zsqltypes.BOOL
+		return gsqltypes.BOOL
 	case BOOL:
-		return zsqltypes.BOOL
+		return gsqltypes.BOOL
 	case STRING:
-		return zsqltypes.STRING
+		return gsqltypes.STRING
 	case BYTES:
-		return zsqltypes.BYTES
+		return gsqltypes.BYTES
 	case DATE:
-		return zsqltypes.DATE
+		return gsqltypes.DATE
 	case DATETIME:
-		return zsqltypes.DATETIME
+		return gsqltypes.DATETIME
 	case TIME:
-		return zsqltypes.TIME
+		return gsqltypes.TIME
 	case TIMESTAMP:
-		return zsqltypes.TIMESTAMP
+		return gsqltypes.TIMESTAMP
 	case INTERVAL:
-		return zsqltypes.INTERVAL
+		return gsqltypes.INTERVAL
 	case ARRAY:
-		return zsqltypes.ARRAY
+		return gsqltypes.ARRAY
 	case STRUCT:
-		return zsqltypes.STRUCT
+		return gsqltypes.STRUCT
 	case GEOGRAPHY:
-		return zsqltypes.GEOGRAPHY
+		return gsqltypes.GEOGRAPHY
 	case JSON:
-		return zsqltypes.JSON
+		return gsqltypes.JSON
 	case RECORD:
-		return zsqltypes.STRUCT
+		return gsqltypes.STRUCT
 	}
-	return zsqltypes.TYPE_UNKNOWN
+	return gsqltypes.TYPE_UNKNOWN
 }
 
 func (t Type) FieldType() FieldType {
@@ -333,10 +333,10 @@ func TableFieldSchemaFromColumnType(name string, t *googlesqlite.ColumnType) *bi
 	if t == nil {
 		return &bigqueryv2.TableFieldSchema{Name: name, Mode: string(NullableMode)}
 	}
-	kind := zsqltypes.TypeKind(t.Kind)
+	kind := gsqltypes.TypeKind(t.Kind)
 	typ := string(TypeFromKind(int(kind)).FieldType())
 	switch kind {
-	case zsqltypes.ARRAY:
+	case gsqltypes.ARRAY:
 		elem := TableFieldSchemaFromColumnType("", t.ElementType)
 		return &bigqueryv2.TableFieldSchema{
 			Name:   name,
@@ -344,7 +344,7 @@ func TableFieldSchemaFromColumnType(name string, t *googlesqlite.ColumnType) *bi
 			Fields: elem.Fields,
 			Mode:   string(RepeatedMode),
 		}
-	case zsqltypes.STRUCT:
+	case gsqltypes.STRUCT:
 		fields := make([]*bigqueryv2.TableFieldSchema, 0, len(t.FieldTypes))
 		for _, f := range t.FieldTypes {
 			fields = append(fields, TableFieldSchemaFromColumnType(f.Name, f.Type))
