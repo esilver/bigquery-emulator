@@ -27,20 +27,20 @@ See [Install](#install) for `go install`, prebuilt binaries and packages, and [H
 
 # Features
 
-- If you can choose the Go language as BigQuery client, you can launch a BigQuery emulator on the same process as the testing process by [httptest](https://pkg.go.dev/net/http/httptest) .
-- BigQuery emulator can be built as a static single binary and can be launched as a standalone process. So, you can use the BigQuery emulator from programs written in non-Go languages or such as the [bq](https://cloud.google.com/bigquery/docs/bq-command-line-tool) command, by specifying the address of the launched BigQuery emulator.
-- BigQuery emulator uses an embedded `googlesqlite` SQL engine for storage and query execution. Depending on the linked `googlesqlite` build, that engine may run on SQLite or DuckDB; this fork's BQ Studio setup can target both emulator processes side by side.
-- You can load seeds from a YAML file on startup
+- From Go, run the emulator in-process via [httptest](https://pkg.go.dev/net/http/httptest), so tests need no separate server.
+- For any other language or the [bq](https://cloud.google.com/bigquery/docs/bq-command-line-tool) CLI, run it as a standalone static single binary and point the client at its address.
+- Storage and query execution run on an embedded `googlesqlite` engine. This fork links the DuckDB-backed build by default, with the upstream SQLite-backed build available for side-by-side comparison in BQ Studio.
+- Seed data from a YAML file on startup.
 
 # Status
 
-This project is still in **beta**, but a large part of BigQuery already works from the official client libraries. The multi-client conformance suite ([`test/e2e`](https://github.com/goccy/bigquery-emulator/tree/main/test/e2e)) exercises the official Python, Ruby, PHP, Node.js and Java client libraries plus the `bq` CLI against the emulator over a shared query corpus, and currently passes for every client.
+This project is still in **beta**, but a large part of BigQuery already works from the official client libraries. The multi-client conformance suite ([`test/e2e`](https://github.com/esilver/bigquery-emulator/tree/main/test/e2e)) exercises the official Python, Ruby, PHP, Node.js and Java client libraries plus the `bq` CLI against the emulator over a shared query corpus, and currently passes for every client.
 
 BigQuery is a large product, so the emulator's coverage is tracked feature by feature in a single MECE (mutually exclusive, collectively exhaustive) matrix. This keeps the README concise and gives you one authoritative place to check support:
 
 ### 📋 [BigQuery feature support matrix](./docs/feature-support.md)
 
-At a glance, the emulator supports dataset / table / job / tabledata management, GoogleSQL query execution, batch load and extract jobs (including loads from Google Cloud Storage), streaming inserts, the gRPC BigQuery Storage read/write APIs, and logical and materialized views. IAM policy management, row access policies, copy jobs, external tables, table snapshots and BigQuery ML are not implemented yet. See the matrix for the complete, categorized breakdown.
+At a glance, the emulator supports dataset / table / job / tabledata management, GoogleSQL query execution, batch load and extract jobs (including loads from Google Cloud Storage), streaming inserts, the gRPC BigQuery Storage read/write APIs, external tables, and logical and materialized views. IAM policy management, row access policies, copy jobs, table snapshots and BigQuery ML are not implemented yet. See the matrix for the complete, categorized breakdown.
 
 ## GoogleSQL
 
