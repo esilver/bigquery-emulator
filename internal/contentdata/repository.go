@@ -27,10 +27,10 @@ func NewRepository() *Repository {
 }
 
 // escapeIdent escapes a SQL identifier so it can be safely embedded between
-// backticks. BigQuery (and googlesqlite) quote identifiers with backticks, so
-// any backtick contained in the identifier itself is doubled. This prevents a
-// crafted project/dataset/table/column name from terminating the quoted
-// region and injecting arbitrary SQL.
+// backticks. BigQuery (and the googlesqlite/DuckDB engine) quote identifiers
+// with backticks, so any backtick contained in the identifier itself is
+// doubled. This prevents a crafted project/dataset/table/column name from
+// terminating the quoted region and injecting arbitrary SQL.
 func escapeIdent(ident string) string {
 	return strings.ReplaceAll(ident, "`", "``")
 }
@@ -39,11 +39,12 @@ func escapeIdent(ident string) string {
 // backtick-quoted SQL identifier.
 //
 // Escaping alone is not sufficient here: a query first passes through the
-// GoogleSQL (ZetaSQL) parser and is then re-emitted for the SQLite backend,
-// and the two layers disagree on how a backtick is escaped (GoogleSQL uses a
-// backslash, SQLite doubles the backtick). A name containing a backtick or a
-// backslash can therefore survive one layer's escaping and break out of the
-// quoted region in the other, allowing arbitrary SQL to be injected (CWE-89).
+// GoogleSQL (ZetaSQL) parser and is then re-emitted for the embedded DuckDB
+// engine, and the two layers disagree on how a backtick is escaped (GoogleSQL
+// uses a backslash, DuckDB doubles the backtick). A name containing a backtick
+// or a backslash can therefore survive one layer's escaping and break out of
+// the quoted region in the other, allowing arbitrary SQL to be injected
+// (CWE-89).
 //
 // Neither character is valid in a BigQuery project, dataset, table, view,
 // routine or column name, so rejecting them closes the injection vector
@@ -596,7 +597,7 @@ func (r *Repository) AddTableData(ctx context.Context, tx *connection.Tx, projec
 			return err
 		}
 		if col.Type == types.JSON {
-			// A JSON column cannot take a raw bound string: SQLite would store
+			// A JSON column cannot take a raw bound string: DuckDB would store
 			// it as a JSON string literal (double-encoded). PARSE_JSON turns
 			// the bound JSON text into a proper JSON value.
 			placeholders = append(placeholders, "PARSE_JSON(?)")

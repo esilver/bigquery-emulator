@@ -449,6 +449,11 @@ func (h *uploadContentHandler) normalizeColumnNameForJSONData(columnMap map[stri
 	}
 }
 
+// ===== Fork: parquet temporal-load helpers =====
+// Fork-added helpers for the parquet load path (zone-shift fix), kept grouped
+// here so they stay separable from the upstream REST handlers below for a
+// future extraction or rebase. See UPSTREAMING.md.
+
 // parquetLeafUnit captures the per-leaf parquet logical temporal scale needed
 // to interpret the raw integer a TIMESTAMP/TIME column reconstructs into.
 // DATE carries no unit (it is a day count) and TIMESTAMP/TIME default to
@@ -555,6 +560,8 @@ func convertParquetTemporal(row map[string]interface{}, columns []*types.Column,
 		}
 	}
 }
+
+// ===== Load helpers (CSV / upload content) =====
 
 func csvRecordsForSchemaInference(records [][]string, skipLeadingRows int64) ([][]string, error) {
 	if skipLeadingRows <= 0 {
@@ -935,6 +942,10 @@ func parseQueryValueAsBool(r *http.Request, key string) bool {
 	}
 	return b
 }
+
+// ===== Upstream REST handlers (BigQuery API v2) =====
+// One handler per resource/method, inherited from upstream. The fork-specific
+// load helpers live above. Below is upstream surface, grouped by resource.
 
 func (h *datasetsDeleteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
