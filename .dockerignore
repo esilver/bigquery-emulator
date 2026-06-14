@@ -5,6 +5,7 @@
 .github
 .claude
 test
+bq-studio-emulator
 bench
 dist
 *.md

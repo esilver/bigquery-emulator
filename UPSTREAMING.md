@@ -13,15 +13,15 @@ This file lists the areas that diverge from upstream and a one-line why for each
 
 ## Parquet temporal-load handling (zone-shift fix)
 
-- `server/handler.go` - `convertParquetTemporal` (around line 535) rewrites the temporal cells of a reconstructed parquet row. parquet-go materializes TIMESTAMP/DATE/TIME leaves into `interface{}` as raw integers (micros/millis/nanos since epoch, a day count, or time-of-day units), so this step converts each to a UTC `time.Time` before the bind seam instead of letting a raw integer bind into a real temporal column. It is invoked from the parquet load path (around line 759).
+- `server/handler.go` - `convertParquetTemporal` (around line 535) rewrites the temporal cells of a reconstructed parquet row. parquet-go materializes TIMESTAMP/DATE/TIME leaves into `interface{}` as raw integers (micros/millis/nanos since epoch, a day count, or time-of-day units), so this step converts each to a UTC `time.Time` before the bind seam, so a real temporal value reaches the temporal column. It is invoked from the parquet load path (around line 759).
 
 - `internal/contentdata/repository.go` - civil-form bind for the zoneless types (around lines 657-675, helpers `formatCivilDate` / `formatCivilDateTime` / `formatCivilTime` around lines 688-708). A `time.Time` binds directly into TIMESTAMP, but DATE, DATETIME and TIME are civil (zoneless). The value layer encodes a `time.Time` as a zoned TIMESTAMP, so binding it into one of those columns would apply a local-zone shift (for example a midnight-UTC DATE rolling back a day west of UTC). These render the value to a civil-form string in UTC so the cast into the column is purely textual and zone-safe.
 
 ## External tables implemented
 
-- `server/handler.go` - `handleExternalTable` (around line 3298), routed from `tablesInsertHandler` when `ExternalDataConfiguration` is set (around line 3250). It translates the external data configuration into a load job, routes it through the existing GCS load pipeline to create and populate a backing table, then records the external configuration on the table metadata so it round-trips on `tables.get`/`tables.list`. This is snapshot-at-create semantics, not live-per-query reads.
+- `server/handler.go` - `handleExternalTable` (around line 3298), routed from `tablesInsertHandler` when `ExternalDataConfiguration` is set (around line 3250). It translates the external data configuration into a load job, routes it through the existing GCS load pipeline to create and populate a backing table, then records the external configuration on the table metadata so it round-trips on `tables.get`/`tables.list`. This uses snapshot-at-create semantics: the backing table is populated once when the external table is created, so later queries read that snapshot.
 - `server/server_test.go` - `TestExternalTable` (around line 3645) covers creating and querying an external table over CSV from a fake GCS server.
-- Reflected in `docs/feature-support.md` as 🟡 (partial) rather than upstream's unimplemented status.
+- Reflected in `docs/feature-support.md` as 🟡 (partial), upgrading the entry from upstream's unimplemented status.
 
 ## Pure-Go build and fork-owned publishing
 
@@ -34,3 +34,7 @@ This file lists the areas that diverge from upstream and a one-line why for each
 ## BQ Studio side-by-side workbench
 
 - `bq-studio-emulator/` - a local BigQuery Studio-style workbench (`server.js`, `scripts/`, `public/`) added by the fork. It is wired to talk to two emulator processes at once: the DuckDB-backed build (default `http://localhost:9050`) and the upstream SQLite-backed build (default `http://localhost:9051`), so the two backends can be compared side by side. Includes seed helpers for the SQLite storage DB and for a bounded NYC Taxi sample loaded into the DuckDB-backed emulator.
+
+## Out of the core image
+
+The workbench (`bq-studio-emulator/`), its host-side seeders, and the benchmark corpora (TPC-H, ClickBench) are satellite artifacts. They stay out of the container image (excluded via `.dockerignore`) and out of the Go module graph, so the core image remains a single static binary on Debian. Within the image the one first-class seeding path is the load API: `server.YAMLSource` / the `--data-from-yaml` flag, plus the bundled `sample.yaml` the quickstart uses. Larger datasets and benchmark corpora load over that same path from host-side scripts against a running emulator, keeping them out of the image bytes and the reviewable Go diff.
