@@ -82,7 +82,14 @@ LIMIT 100</textarea>
                   <button id="downloadCsvBtn" class="secondary-btn hidden" title="Download result rows as CSV">Download CSV</button>
                 </div>
               </div>
+              <div id="resultSubtabs" class="result-subtabs" role="tablist" aria-label="Result views">
+                <button class="result-subtab active" data-result-view="results" role="tab" aria-selected="true">Results</button>
+                <button class="result-subtab" data-result-view="json" role="tab" aria-selected="false">JSON</button>
+                <button class="result-subtab" data-result-view="execution" role="tab" aria-selected="false">Execution details</button>
+              </div>
               <div id="resultsGrid" class="grid-shell empty-state" aria-busy="false">Run a query to populate results.</div>
+              <pre id="resultJson" class="result-json empty-state hidden">Run a query to populate results.</pre>
+              <div id="resultExecution" class="result-execution empty-state hidden">Run a query to populate results.</div>
               <div id="compareDiff" class="compare-diff hidden"></div>
               <div id="compareGrids" class="compare-grids hidden"></div>
             </section>

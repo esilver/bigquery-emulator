@@ -1,7 +1,16 @@
+// In a browser document is defined and the workbench wires up below. The module
+// export at the end lets a Node test require this file for executionDetailRows
+// while skipping the DOM-bound setup.
+const hasDocument = typeof document !== "undefined";
+
+// Reading localStorage stays browser-only. Under a Node require the shim returns
+// empty so module load does not touch APIs the test environment lacks.
+const store = typeof localStorage !== "undefined" ? localStorage : { getItem: () => null, setItem: () => {} };
+
 const state = {
   health: null,
   targets: [],
-  activeTarget: localStorage.getItem("bqStudioTarget") || "duckdb",
+  activeTarget: store.getItem("bqStudioTarget") || "duckdb",
   datasets: [],
   datasetsLoaded: false,
   datasetsError: null,
@@ -13,13 +22,28 @@ const state = {
   activeQuery: null,
   loadGeneration: 0,
   lastResult: null,
-  compareMode: localStorage.getItem("bqStudioCompareMode") === "true",
-  history: JSON.parse(localStorage.getItem("bqStudioHistory") || "[]")
+  activeResultView: "results",
+  compareMode: store.getItem("bqStudioCompareMode") === "true",
+  history: JSON.parse(store.getItem("bqStudioHistory") || "[]")
 };
+
+// executionDetailRows derives the Execution-details list from a query result.
+// It is a pure transform so the same data can power the metadata panel and be
+// unit-tested without a DOM. The values are pulled from data renderResults
+// already receives, so the sub-tab adds no extra request.
+function executionDetailRows(result) {
+  const data = result || {};
+  return [
+    { label: "Duration", value: Number.isFinite(data.durationMs) ? `${data.durationMs} ms` : "" },
+    { label: "Total rows", value: data.totalRows === undefined || data.totalRows === null ? "" : String(data.totalRows) },
+    { label: "Row limit", value: data.rowLimit === undefined || data.rowLimit === null ? "" : String(data.rowLimit) },
+    { label: "Job ID", value: data.jobId || "" }
+  ];
+}
 
 const el = id => document.getElementById(id);
 
-const refs = {
+const refs = hasDocument ? {
   connectionText: el("connectionText"),
   targetSelect: el("targetSelect"),
   statusBadge: el("statusBadge"),
@@ -30,7 +54,10 @@ const refs = {
   queryMeta: el("queryMeta"),
   sqlEditor: el("sqlEditor"),
   queryError: el("queryError"),
+  resultSubtabs: el("resultSubtabs"),
   resultsGrid: el("resultsGrid"),
+  resultJson: el("resultJson"),
+  resultExecution: el("resultExecution"),
   resultSummary: el("resultSummary"),
   compareDiff: el("compareDiff"),
   compareGrids: el("compareGrids"),
@@ -51,7 +78,7 @@ const refs = {
   benchRuns: el("benchRuns"),
   benchmarkOutput: el("benchmarkOutput"),
   historyList: el("historyList")
-};
+} : {};
 
 function pathWithTarget(path) {
   const url = new URL(path, window.location.origin);
@@ -151,6 +178,13 @@ function setResultsPlaceholder(summary, message, stateClass = "") {
   refs.queryMeta.textContent = "";
   refs.resultsGrid.className = `grid-shell empty-state ${stateClass}`.trim();
   refs.resultsGrid.textContent = message;
+  // Keep the JSON and Execution panels in step with the grid placeholder so a
+  // sub-tab switch during a run or after a failure shows the same message.
+  refs.resultJson.className = `result-json empty-state ${stateClass}`.trim();
+  refs.resultJson.textContent = message;
+  refs.resultExecution.className = `result-execution empty-state ${stateClass}`.trim();
+  refs.resultExecution.textContent = message;
+  applyResultView();
 }
 
 function formatDuration(ms) {
@@ -637,29 +671,78 @@ function renderResults(result) {
   refs.queryMeta.textContent = result.jobId ? `Job ${result.jobId}` : "";
   setResultExportEnabled(fields.length > 0);
   refs.resultsGrid.setAttribute("aria-busy", "false");
+  renderResultJson(rows);
+  renderResultExecution(result);
 
   if (!fields.length) {
     refs.resultsGrid.className = "grid-shell empty-state";
     refs.resultsGrid.textContent = "Query completed with no tabular result.";
-    return;
+  } else {
+    refs.resultsGrid.className = "grid-shell";
+    refs.resultsGrid.innerHTML = buildGridHtml(fields, rows);
+    bindCellCopy(refs.resultsGrid);
   }
 
-  refs.resultsGrid.className = "grid-shell";
-  refs.resultsGrid.innerHTML = buildGridHtml(fields, rows);
-  bindCellCopy(refs.resultsGrid);
+  // Re-apply after each panel sets its own base class so the active sub-tab
+  // stays visible and the inactive panels keep the hidden class.
+  applyResultView();
 }
 
+function renderResultJson(rows) {
+  refs.resultJson.className = "result-json";
+  refs.resultJson.textContent = JSON.stringify(rows || [], null, 2);
+}
+
+function renderResultExecution(result) {
+  refs.resultExecution.className = "result-execution";
+  refs.resultExecution.innerHTML = `
+    <dl class="metadata-list">
+      ${executionDetailRows(result).map(row => (
+        `<dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd>`
+      )).join("")}
+    </dl>
+  `;
+}
+
+// The active sub-tab decides which single-result panel is visible. Compare owns
+// its own regions, so its toggle clears the single-result view entirely.
 function showSingleResultsRegion() {
-  refs.resultsGrid.classList.remove("hidden");
+  refs.resultSubtabs.classList.remove("hidden");
+  applyResultView();
   refs.compareDiff.classList.add("hidden");
   refs.compareGrids.classList.add("hidden");
 }
 
 function showCompareResultsRegion() {
+  refs.resultSubtabs.classList.add("hidden");
   refs.resultsGrid.classList.add("hidden");
+  refs.resultJson.classList.add("hidden");
+  refs.resultExecution.classList.add("hidden");
   refs.compareDiff.classList.remove("hidden");
   refs.compareGrids.classList.remove("hidden");
   setResultExportEnabled(false);
+}
+
+function applyResultView() {
+  const views = {
+    results: refs.resultsGrid,
+    json: refs.resultJson,
+    execution: refs.resultExecution
+  };
+  for (const [view, node] of Object.entries(views)) {
+    node.classList.toggle("hidden", view !== state.activeResultView);
+  }
+  refs.resultSubtabs.querySelectorAll(".result-subtab").forEach(tab => {
+    const active = tab.dataset.resultView === state.activeResultView;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", String(active));
+  });
+}
+
+function setResultView(view) {
+  state.activeResultView = view;
+  if (!refs.compareDiff.classList.contains("hidden")) return;
+  applyResultView();
 }
 
 function setResultExportEnabled(enabled) {
@@ -1117,6 +1200,9 @@ function bindEvents() {
       toggleSqlLineComment(refs.sqlEditor);
     }
   });
+  refs.resultSubtabs.querySelectorAll(".result-subtab").forEach(tab => {
+    tab.addEventListener("click", () => setResultView(tab.dataset.resultView));
+  });
   el("previewBtn").addEventListener("click", previewSelectedTable);
   el("sampleCountBtn").addEventListener("click", setCountQuery);
   el("sampleAggregateBtn").addEventListener("click", setAggregateQuery);
@@ -1167,5 +1253,13 @@ async function init() {
   renderHistory();
 }
 
-bindEvents();
-init();
+if (hasDocument) {
+  bindEvents();
+  init();
+}
+
+// Node tests require this file for the pure helpers above. Browsers ignore the
+// guarded export because module is undefined there.
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { executionDetailRows };
+}
