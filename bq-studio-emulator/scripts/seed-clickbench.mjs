@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { requireCli, waitForEmulator } from "./seed-utils.mjs";
 
 // Canonical single-file ClickBench hits parquet published by ClickHouse.
 const DEFAULT_SOURCE_URL = "https://datasets.clickhouse.com/hits_compatible/hits.parquet";
-const workDir = process.env.CLICKBENCH_WORKDIR || "/private/tmp/bq-studio-clickbench";
+const workDir = process.env.CLICKBENCH_WORKDIR || path.join(os.tmpdir(), "bq-studio-clickbench");
 const projectId = process.env.BQ_PROJECT_ID || "test";
 const datasetId = process.env.BQ_CLICKBENCH_DATASET || "clickbench";
 const tableId = process.env.BQ_CLICKBENCH_TABLE || "hits";
@@ -279,7 +281,7 @@ async function loadParquet(parquetPath) {
     }
   };
   const parquet = await fsp.readFile(parquetPath);
-  const boundary = `codex-clickbench-${randomUUID()}`;
+  const boundary = `bq-studio-clickbench-${randomUUID()}`;
   const body = Buffer.concat([
     Buffer.from(`--${boundary}\r\ncontent-type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`, "utf8"),
     Buffer.from(`--${boundary}\r\ncontent-type: application/octet-stream\r\n\r\n`, "utf8"),
@@ -319,6 +321,8 @@ FROM \`${projectId}.${datasetId}.${tableId}\`
 async function main() {
   console.log(`Target emulator: ${emulatorUrl}`);
   console.log(`Target table: ${projectId}.${datasetId}.${tableId}`);
+  // The subset carve shells out to duckdb; a full-file load (limit 0) does not.
+  if (rowLimit !== 0) requireCli("duckdb");
   await downloadParquet();
   const loadParquetPath = resolveLoadParquet();
 
@@ -327,6 +331,7 @@ async function main() {
     return;
   }
 
+  await waitForEmulator(emulatorUrl, { projectId });
   await ensureDataset();
   await dropExistingTable();
   await loadParquet(loadParquetPath);

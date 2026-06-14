@@ -221,6 +221,11 @@ async function loadHealth(generation) {
     const health = await api("/api/health");
     if (isStaleLoad(generation)) return false;
     state.health = health;
+    if (health.ok === false) {
+      refs.connectionText.textContent = `${health.targetLabel || state.activeTarget}: unreachable at ${health.emulatorUrl}`;
+      setStatus("error", "Offline");
+      return true;
+    }
     refs.connectionText.textContent = `${health.targetLabel || state.activeTarget}: ${health.projectId} at ${health.emulatorUrl}`;
     setStatus("ok", "Connected");
   } catch (error) {
@@ -242,13 +247,10 @@ async function loadDatasets(generation) {
 function renderDatasets() {
   const search = refs.datasetSearch.value.trim().toLowerCase();
   const preferred = new Set([
-    "billing_source",
-    "reporting",
-    "finance_audit",
-    "finance_staging",
-    "finance_intermediate",
-    "finance_reporting",
-    "dbt_test__audit"
+    "dataset1",
+    "nyc_taxi",
+    "tpch",
+    "clickbench"
   ]);
   const datasets = state.datasets
     .filter(dataset => !isGeneratedArtifactDataset(dataset.id))
@@ -345,7 +347,7 @@ async function selectTable(datasetId, tableId, generation = state.loadGeneration
   refs.benchDataset.value = datasetId;
   refs.benchTable.value = tableId;
   refs.sqlEditor.value = `SELECT *
-FROM \`${state.health?.projectId || "finance-emulator"}.${datasetId}.${tableId}\`
+FROM \`${state.health?.projectId || "test"}.${datasetId}.${tableId}\`
 LIMIT 100`;
   renderDatasets();
   try {
@@ -522,7 +524,7 @@ async function previewSelectedTable() {
 function setCountQuery() {
   if (!state.selectedDataset || !state.selectedTable) return;
   refs.sqlEditor.value = `SELECT COUNT(*) AS row_count
-FROM \`${state.health?.projectId || "finance-emulator"}.${state.selectedDataset}.${state.selectedTable}\``;
+FROM \`${state.health?.projectId || "test"}.${state.selectedDataset}.${state.selectedTable}\``;
 }
 
 function setAggregateQuery() {
@@ -535,7 +537,7 @@ function setAggregateQuery() {
     return;
   }
   refs.sqlEditor.value = `SELECT ${group.name}, COUNT(*) AS row_count, SUM(${amount.name}) AS total_${amount.name}
-FROM \`${state.health?.projectId || "finance-emulator"}.${state.selectedDataset}.${state.selectedTable}\`
+FROM \`${state.health?.projectId || "test"}.${state.selectedDataset}.${state.selectedTable}\`
 GROUP BY ${group.name}
 ORDER BY total_${amount.name} DESC
 LIMIT 100`;
@@ -875,12 +877,12 @@ async function init() {
   try {
     await loadDatasets(generation);
     if (isStaleLoad(generation)) return;
-    const starter = state.datasets.find(dataset => dataset.id === "dbt_test__audit") || state.datasets[0];
+    const starter = state.datasets.find(dataset => dataset.id === "dataset1") || state.datasets[0];
     if (starter && !state.selectedDataset) {
       await selectDataset(starter.id, generation);
       if (isStaleLoad(generation)) return;
       const tables = state.tablesByDataset.get(starter.id) || [];
-      const starterTable = tables.find(table => table.tableId === "events_1m") || tables[0];
+      const starterTable = tables.find(table => table.tableId === "table_a") || tables[0];
       if (starterTable) await selectTable(starter.id, starterTable.tableId, generation);
     }
   } catch (error) {

@@ -6,7 +6,7 @@ const { randomUUID } = require("node:crypto");
 
 const PORT = Number(process.env.PORT || 5177);
 const HOST = process.env.HOST || "127.0.0.1";
-const PROJECT_ID = process.env.BQ_PROJECT_ID || "finance-emulator";
+const PROJECT_ID = process.env.BQ_PROJECT_ID || "test";
 const DEFAULT_TARGET_ID = process.env.BQ_DEFAULT_TARGET || "duckdb";
 const QUERY_MAX_RESULTS = parsePositiveInteger(process.env.BQ_STUDIO_QUERY_MAX_RESULTS, 1000);
 const TARGETS = [
@@ -456,7 +456,7 @@ async function handleCsvLoad(req, res, target) {
     }
   };
 
-  const boundary = `codex-bqstudio-${randomUUID()}`;
+  const boundary = `bq-studio-${randomUUID()}`;
   const multipartBody = Buffer.concat([
     Buffer.from(`--${boundary}\r\ncontent-type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`, "utf8"),
     Buffer.from(`--${boundary}\r\ncontent-type: text/csv\r\n\r\n`, "utf8"),
@@ -500,8 +500,8 @@ function stats(samples) {
 
 async function handleBenchmark(req, res, target) {
   const body = await readJson(req);
-  const dataset = safeIdentifier(body.dataset || "dbt_test__audit", "dataset");
-  const table = safeIdentifier(body.table || "events_1m", "table");
+  const dataset = safeIdentifier(body.dataset || "dataset1", "dataset");
+  const table = safeIdentifier(body.table || "table_a", "table");
   const runs = Math.max(1, Math.min(Number(body.runs || 3), 20));
   const ref = tableRef(target, dataset, table);
   const tableMeta = await emulatorFetch(`/bigquery/v2/projects/${encodeURIComponent(target.projectId)}/datasets/${encodeURIComponent(dataset)}/tables/${encodeURIComponent(table)}`, { target });
@@ -589,17 +589,31 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && url.pathname === "/api/health") {
     const startedAt = performance.now();
-    const datasets = await emulatorFetch(`/bigquery/v2/projects/${encodeURIComponent(target.projectId)}/datasets`, { target });
-    const visible = visibleDatasets(datasets.datasets, target);
-    return sendJson(res, 200, {
-      ok: true,
-      targetId: target.id,
-      targetLabel: target.label,
-      emulatorUrl: target.emulatorUrl,
-      projectId: target.projectId,
-      datasetCount: visible.length,
-      durationMs: Math.round((performance.now() - startedAt) * 100) / 100
-    });
+    try {
+      const datasets = await emulatorFetch(`/bigquery/v2/projects/${encodeURIComponent(target.projectId)}/datasets`, { target });
+      const visible = visibleDatasets(datasets.datasets, target);
+      return sendJson(res, 200, {
+        ok: true,
+        targetId: target.id,
+        targetLabel: target.label,
+        emulatorUrl: target.emulatorUrl,
+        projectId: target.projectId,
+        datasetCount: visible.length,
+        durationMs: Math.round((performance.now() - startedAt) * 100) / 100
+      });
+    } catch (error) {
+      // A health probe stays a 200 verdict so a harness can poll it
+      // deterministically; the backend status rides in the ok flag.
+      return sendJson(res, 200, {
+        ok: false,
+        targetId: target.id,
+        targetLabel: target.label,
+        emulatorUrl: target.emulatorUrl,
+        projectId: target.projectId,
+        error: error.message || "Emulator unreachable",
+        durationMs: Math.round((performance.now() - startedAt) * 100) / 100
+      });
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/api/datasets") {

@@ -54,8 +54,10 @@
                 <button id="sampleAggregateBtn" class="secondary-btn">Aggregate</button>
               </div>
             </div>
-            <textarea id="sqlEditor" spellcheck="false">SELECT COUNT(*) AS row_count
-FROM `finance-emulator.dbt_test__audit.events_1m`</textarea>
+            <textarea id="sqlEditor" spellcheck="false">SELECT *
+FROM `test.dataset1.table_a`
+ORDER BY id
+LIMIT 100</textarea>
             <div id="queryError" class="error-box hidden"></div>
             <section class="results-panel">
               <div class="panel-title">
@@ -71,7 +73,7 @@ FROM `finance-emulator.dbt_test__audit.events_1m`</textarea>
               <div class="form-grid">
                 <label>
                   <span>Dataset</span>
-                  <input id="csvDataset" name="dataset" value="dbt_test__audit">
+                  <input id="csvDataset" name="dataset" value="dataset1">
                 </label>
                 <label>
                   <span>Table</span>
@@ -112,11 +114,11 @@ FROM `finance-emulator.dbt_test__audit.events_1m`</textarea>
             <div class="benchmark-controls">
               <label>
                 <span>Dataset</span>
-                <input id="benchDataset" value="dbt_test__audit">
+                <input id="benchDataset" value="dataset1">
               </label>
               <label>
                 <span>Table</span>
-                <input id="benchTable" value="events_1m">
+                <input id="benchTable" value="table_a">
               </label>
               <label>
                 <span>Runs</span>

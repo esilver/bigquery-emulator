@@ -17,16 +17,16 @@ const {
 test("generated artifact datasets are hidden from the explorer", () => {
   assert.equal(isGeneratedArtifactDataset("bqjob_r123"), true);
   assert.equal(isGeneratedArtifactDataset("04c352ea-ccf5-4326-8ca3-97a6759858e1"), true);
-  assert.equal(isGeneratedArtifactDataset("dbt_test__audit"), false);
+  assert.equal(isGeneratedArtifactDataset("dataset1"), false);
 
-  const target = { projectId: "finance-emulator" };
+  const target = { projectId: "test" };
   const datasets = visibleDatasets([
-    { datasetReference: { projectId: "finance-emulator", datasetId: "dbt_test__audit" }, location: "US" },
-    { datasetReference: { projectId: "finance-emulator", datasetId: "bqjob_r123" }, location: "US" },
-    { datasetReference: { projectId: "finance-emulator", datasetId: "04c352ea-ccf5-4326-8ca3-97a6759858e1" }, location: "US" }
+    { datasetReference: { projectId: "test", datasetId: "dataset1" }, location: "US" },
+    { datasetReference: { projectId: "test", datasetId: "bqjob_r123" }, location: "US" },
+    { datasetReference: { projectId: "test", datasetId: "04c352ea-ccf5-4326-8ca3-97a6759858e1" }, location: "US" }
   ], target);
 
-  assert.deepEqual(datasets.map(dataset => dataset.id), ["dbt_test__audit"]);
+  assert.deepEqual(datasets.map(dataset => dataset.id), ["dataset1"]);
 });
 
 test("query row normalization decodes repeated records", () => {
@@ -85,7 +85,7 @@ test("CSV splitting handles quoted commas and multiline quoted fields", () => {
 
 test("report-style CSV inference skips title rows and trims footer rows", () => {
   const csv = Buffer.from([
-    "FY25 Meijer x Chicory Daily Report",
+    "Daily Activity Report",
     "date,clicks,cost,active",
     "2026-06-01,12,1.25,true",
     "2026-06-02,10,2.50,false",
@@ -108,12 +108,12 @@ test("report-style CSV inference skips title rows and trims footer rows", () => 
 });
 
 test("resource identifiers preserve BigQuery-safe dashes only where allowed", () => {
-  assert.equal(safeIdentifier("dbt_test__audit", "dataset"), "dbt_test__audit");
+  assert.equal(safeIdentifier("dataset1", "dataset"), "dataset1");
   assert.throws(() => safeIdentifier("bad-dataset", "dataset"), /Invalid dataset/);
   assert.equal(safeResourceIdentifier("04c352ea-ccf5", "dataset"), "04c352ea-ccf5");
 
   assert.equal(
-    tableRef({ projectId: "finance-emulator" }, "dbt_test__audit", "events_1m"),
-    "`finance-emulator.dbt_test__audit.events_1m`"
+    tableRef({ projectId: "test" }, "dataset1", "table_a"),
+    "`test.dataset1.table_a`"
   );
 });

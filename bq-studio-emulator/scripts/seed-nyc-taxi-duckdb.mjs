@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { requireCli, waitForEmulator } from "./seed-utils.mjs";
 
 const DEFAULT_SOURCE_URL = "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet";
-const workDir = process.env.NYC_TAXI_WORKDIR || "/private/tmp/bq-studio-nyc-taxi";
-const projectId = process.env.BQ_PROJECT_ID || "finance-emulator";
+const workDir = process.env.NYC_TAXI_WORKDIR || path.join(os.tmpdir(), "bq-studio-nyc-taxi");
+const projectId = process.env.BQ_PROJECT_ID || "test";
 const datasetId = process.env.BQ_NYC_TAXI_DATASET || "nyc_taxi";
 const tableId = process.env.BQ_NYC_TAXI_TABLE || "yellow_tripdata_2024_01";
 const emulatorUrl = (process.env.BQ_DUCKDB_EMULATOR_URL || process.env.BQ_EMULATOR_URL || "http://127.0.0.1:9050").replace(/\/$/, "");
@@ -193,7 +195,7 @@ async function loadCsv() {
     }
   };
   const csv = await fsp.readFile(csvPath);
-  const boundary = `codex-nyc-taxi-${randomUUID()}`;
+  const boundary = `bq-studio-nyc-taxi-${randomUUID()}`;
   const body = Buffer.concat([
     Buffer.from(`--${boundary}\r\ncontent-type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`, "utf8"),
     Buffer.from(`--${boundary}\r\ncontent-type: text/csv\r\n\r\n`, "utf8"),
@@ -233,6 +235,7 @@ FROM \`${projectId}.${datasetId}.${tableId}\`
 async function main() {
   console.log(`Target emulator: ${emulatorUrl}`);
   console.log(`Target table: ${projectId}.${datasetId}.${tableId}`);
+  requireCli("duckdb");
   await downloadParquet();
   writeCsvSample();
 
@@ -241,6 +244,7 @@ async function main() {
     return;
   }
 
+  await waitForEmulator(emulatorUrl, { projectId });
   await ensureDataset();
   await dropExistingTable();
   await loadCsv();

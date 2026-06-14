@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { requireCli } from "./seed-utils.mjs";
 
-const dbPath = process.env.SQLITE_DB || process.argv[2] || "/private/tmp/bqe-sqlite-data-fast/finance-emulator-sqlite.db";
-const projectId = process.env.BQ_PROJECT_ID || "finance-emulator";
-const datasetId = process.env.BQ_DATASET_ID || "dbt_test__audit";
+const dbPath = process.env.SQLITE_DB || process.argv[2] || path.join(os.tmpdir(), "bq-studio-sqlite", "bq-studio-sqlite.db");
+const projectId = process.env.BQ_PROJECT_ID || "test";
+const datasetId = process.env.BQ_DATASET_ID || "sample";
+const selfLinkBase = (process.env.BQ_SQLITE_EMULATOR_URL || "http://localhost:9051").replace(/\/$/, "");
 
 const tablePrefix = `${projectId}_${datasetId}`;
 
@@ -45,7 +50,7 @@ function tableMetadata(tableId, fields, rowCount) {
     lastModifiedTime: "1781230223",
     numRows: String(rowCount),
     schema: { fields },
-    selfLink: `http://0.0.0.0:9050/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables/${tableId}`,
+    selfLink: `${selfLinkBase}/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables/${tableId}`,
     tableReference: tableRef,
     type: "TABLE",
   };
@@ -313,6 +318,9 @@ COMMIT;
 
 ANALYZE;
 `;
+
+requireCli("sqlite3");
+fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
 const started = process.hrtime.bigint();
 const result = spawnSync("sqlite3", [dbPath], {

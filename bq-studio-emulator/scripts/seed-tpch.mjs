@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawnSync, execFileSync } from "node:child_process";
+import { requireCli, waitForEmulator } from "./seed-utils.mjs";
 
-const workDir = process.env.TPCH_WORKDIR || "/private/tmp/bq-studio-tpch";
+const workDir = process.env.TPCH_WORKDIR || path.join(os.tmpdir(), "bq-studio-tpch");
 const projectId = process.env.BQ_PROJECT_ID || "test";
 const datasetId = process.env.BQ_TPCH_DATASET || "tpch";
 const emulatorUrl = (process.env.BQ_DUCKDB_EMULATOR_URL || process.env.BQ_EMULATOR_URL || "http://127.0.0.1:9050").replace(/\/$/, "");
@@ -197,7 +199,7 @@ async function loadTable(tableId) {
     }
   };
   const parquet = await fsp.readFile(parquetPath);
-  const boundary = `codex-tpch-${randomUUID()}`;
+  const boundary = `bq-studio-tpch-${randomUUID()}`;
   const body = Buffer.concat([
     Buffer.from(`--${boundary}\r\ncontent-type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`, "utf8"),
     Buffer.from(`--${boundary}\r\ncontent-type: application/octet-stream\r\n\r\n`, "utf8"),
@@ -237,6 +239,7 @@ FROM \`${projectId}.${datasetId}.lineitem\`
 async function main() {
   console.log(`Target emulator: ${emulatorUrl}`);
   console.log(`Target dataset: ${projectId}.${datasetId} (TPC-H sf=${scaleFactor})`);
+  requireCli("duckdb");
   await fsp.mkdir(workDir, { recursive: true });
   generateTables();
 
@@ -245,6 +248,7 @@ async function main() {
     return;
   }
 
+  await waitForEmulator(emulatorUrl, { projectId });
   await ensureDataset();
   for (const tableId of tpchTables) {
     await dropExistingTable(tableId);
