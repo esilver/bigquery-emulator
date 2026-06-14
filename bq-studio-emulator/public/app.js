@@ -3,6 +3,8 @@ const state = {
   targets: [],
   activeTarget: localStorage.getItem("bqStudioTarget") || "duckdb",
   datasets: [],
+  datasetsLoaded: false,
+  datasetsError: null,
   tablesByDataset: new Map(),
   selectedDataset: null,
   expandedDataset: null,
@@ -10,6 +12,8 @@ const state = {
   selectedSchema: null,
   activeQuery: null,
   loadGeneration: 0,
+  lastResult: null,
+  compareMode: localStorage.getItem("bqStudioCompareMode") === "true",
   history: JSON.parse(localStorage.getItem("bqStudioHistory") || "[]")
 };
 
@@ -28,6 +32,11 @@ const refs = {
   queryError: el("queryError"),
   resultsGrid: el("resultsGrid"),
   resultSummary: el("resultSummary"),
+  compareDiff: el("compareDiff"),
+  compareGrids: el("compareGrids"),
+  compareModeToggle: el("compareModeToggle"),
+  copyJsonBtn: el("copyJsonBtn"),
+  downloadCsvBtn: el("downloadCsvBtn"),
   tableDetails: el("tableDetails"),
   tableStats: el("tableStats"),
   csvDataset: el("csvDataset"),
@@ -103,16 +112,21 @@ function isStaleView(token) {
 function resetExplorerState() {
   state.health = null;
   state.datasets = [];
+  state.datasetsLoaded = false;
+  state.datasetsError = null;
   state.tablesByDataset = new Map();
   state.selectedDataset = null;
   state.expandedDataset = null;
   state.selectedTable = null;
   state.selectedSchema = null;
+  state.lastResult = null;
   refs.activeTableLabel.textContent = "No table selected";
   refs.queryMeta.textContent = "";
   refs.tableStats.textContent = "";
   refs.tableDetails.className = "details-content empty-state";
   refs.tableDetails.textContent = "Select a table.";
+  showSingleResultsRegion();
+  setResultExportEnabled(false);
   setResultsPlaceholder("No results", "Run a query to populate results.");
 }
 
@@ -240,6 +254,8 @@ async function loadDatasets(generation) {
   const data = await api("/api/datasets");
   if (isStaleLoad(generation)) return false;
   state.datasets = data.datasets || [];
+  state.datasetsLoaded = true;
+  state.datasetsError = null;
   renderDatasets();
   return true;
 }
@@ -264,7 +280,22 @@ function renderDatasets() {
   refs.datasetList.innerHTML = "";
   if (!datasets.length) {
     refs.datasetList.className = "dataset-list empty-state";
-    refs.datasetList.textContent = "No datasets";
+    if (state.datasetsError) {
+      refs.datasetList.innerHTML = "";
+      const message = document.createElement("div");
+      message.textContent = `Could not load datasets: ${state.datasetsError}`;
+      const retry = document.createElement("button");
+      retry.className = "secondary-btn";
+      retry.textContent = "Retry";
+      retry.style.marginTop = "8px";
+      retry.addEventListener("click", init);
+      refs.datasetList.appendChild(message);
+      refs.datasetList.appendChild(retry);
+    } else if (!state.datasetsLoaded) {
+      refs.datasetList.textContent = "Loading datasets...";
+    } else {
+      refs.datasetList.textContent = search ? "No matching datasets" : "No datasets";
+    }
     return;
   }
   refs.datasetList.className = "dataset-list";
@@ -394,6 +425,9 @@ async function runQuery(query = refs.sqlEditor.value, source = "manual") {
   const cancelMode = activeTargetConfig()?.cancelMode || "interrupt";
   const activeQuery = { controller, startedAt, cancelRequested: false, cancelMode };
   state.activeQuery = activeQuery;
+  showSingleResultsRegion();
+  setResultExportEnabled(false);
+  refs.resultsGrid.setAttribute("aria-busy", "true");
   setResultsPlaceholder("Running query...", "Running query...", "loading-state");
   const progressTimer = startQueryProgress(startedAt);
   try {
@@ -441,26 +475,143 @@ async function runQuery(query = refs.sqlEditor.value, source = "manual") {
   } finally {
     window.clearInterval(progressTimer);
     if (state.activeQuery === activeQuery) state.activeQuery = null;
+    refs.resultsGrid.setAttribute("aria-busy", "false");
     hideCancel();
     restore();
   }
 }
 
-function renderResults(result) {
-  const fields = result.fields || [];
-  const rows = result.rows || [];
-  const limited = result.rowLimit && result.totalRows > rows.length ? ` · limited to ${formatNumber(result.rowLimit)}` : "";
-  refs.resultSummary.textContent = `${formatNumber(rows.length)} shown · ${formatNumber(result.totalRows)} total${limited} · ${result.durationMs} ms · ${result.jobId || ""}`;
-  refs.queryMeta.textContent = result.jobId ? `Job ${result.jobId}` : "";
-
-  if (!fields.length) {
-    refs.resultsGrid.className = "grid-shell empty-state";
-    refs.resultsGrid.textContent = "Query completed with no tabular result.";
-    return;
+async function runCompare(query = refs.sqlEditor.value, source = "manual") {
+  if (state.activeQuery) return;
+  clearError();
+  const viewToken = currentViewToken();
+  const controller = new AbortController();
+  const restore = setBusy(el("compareBtn"), "Comparing");
+  const startedAt = Date.now();
+  const activeQuery = { controller, startedAt, cancelRequested: false, cancelMode: "interrupt" };
+  state.activeQuery = activeQuery;
+  state.lastResult = null;
+  showCompareResultsRegion();
+  refs.queryMeta.textContent = "Comparing";
+  refs.resultSummary.textContent = "Comparing across backends...";
+  refs.compareDiff.innerHTML = `<span class="compare-chip">Running both backends...</span>`;
+  refs.compareGrids.innerHTML = "";
+  try {
+    const response = await fetch("/api/query/compare", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query }),
+      signal: controller.signal
+    });
+    const text = await response.text();
+    const body = text ? JSON.parse(text) : {};
+    if (isStaleView(viewToken)) return;
+    if (!response.ok) {
+      const error = new Error(body.error || response.statusText);
+      error.details = body.details;
+      throw error;
+    }
+    renderCompare(body.results || []);
+    addHistory({
+      query,
+      source,
+      compare: true,
+      ok: (body.results || []).every(entry => entry.ok),
+      durationMs: Date.now() - startedAt,
+      targets: (body.results || []).map(entry => ({
+        id: entry.targetId,
+        durationMs: entry.durationMs,
+        totalRows: entry.totalRows,
+        ok: entry.ok
+      }))
+    });
+  } catch (error) {
+    if (isStaleView(viewToken)) return;
+    const durationMs = Date.now() - startedAt;
+    refs.compareDiff.innerHTML = `<span class="compare-chip differ">${isAbortError(error) ? "Compare canceled" : "Compare failed"}</span>`;
+    refs.compareGrids.innerHTML = "";
+    refs.resultSummary.textContent = `${isAbortError(error) ? "Canceled" : "Failed"} · ${formatDuration(durationMs)}`;
+    if (!isAbortError(error)) showError(error.message, error.details);
+    addHistory({
+      query,
+      source,
+      compare: true,
+      ok: false,
+      canceled: isAbortError(error),
+      durationMs,
+      error: error.message
+    });
+  } finally {
+    if (state.activeQuery === activeQuery) state.activeQuery = null;
+    restore();
   }
+}
 
-  refs.resultsGrid.className = "grid-shell";
-  refs.resultsGrid.innerHTML = `
+function renderCompare(results) {
+  refs.queryMeta.textContent = "";
+  const summarySpread = results.map(entry => `${entry.targetLabel}: ${entry.ok ? formatDuration(entry.durationMs) : "error"}`).join(" · ");
+  refs.resultSummary.textContent = summarySpread || "No comparison";
+
+  const okResults = results.filter(entry => entry.ok);
+  const chips = [];
+  if (okResults.length === results.length && results.length >= 2) {
+    const counts = okResults.map(entry => entry.totalRows);
+    const sameRows = counts.every(count => count === counts[0]);
+    chips.push(sameRows
+      ? `<span class="compare-chip match">Rows match: ${formatNumber(counts[0])}</span>`
+      : `<span class="compare-chip differ">Rows differ: ${okResults.map(entry => `${entry.targetLabel} ${formatNumber(entry.totalRows)}`).join(" vs ")}</span>`);
+
+    const shapes = okResults.map(entry => (entry.fields || []).map(field => `${field.name}:${field.type}`).join(","));
+    const sameShape = shapes.every(shape => shape === shapes[0]);
+    chips.push(sameShape
+      ? `<span class="compare-chip match">Schema match</span>`
+      : `<span class="compare-chip differ">Schema differs (e.g. INT64 vs INTEGER)</span>`);
+
+    const durations = okResults.map(entry => entry.durationMs);
+    const slow = Math.max(...durations);
+    const fast = Math.min(...durations) || 1;
+    const ratio = (slow / fast).toFixed(1);
+    chips.push(`<span class="compare-chip">Latency ${okResults.map(entry => `${entry.targetLabel} ${formatDuration(entry.durationMs)}`).join(" · ")} (${ratio}x)</span>`);
+  } else if (okResults.length && okResults.length < results.length) {
+    const failing = results.filter(entry => !entry.ok).map(entry => entry.targetLabel).join(", ");
+    chips.push(`<span class="compare-chip differ">Divergence: ${escapeHtml(failing)} errored, others ran</span>`);
+  }
+  refs.compareDiff.innerHTML = chips.join("") || `<span class="compare-chip differ">No successful backend</span>`;
+
+  refs.compareGrids.innerHTML = "";
+  for (const entry of results) {
+    const pane = document.createElement("div");
+    pane.className = "compare-pane";
+    const head = document.createElement("div");
+    head.className = "compare-pane-head";
+    head.innerHTML = `<span>${escapeHtml(entry.targetLabel)}</span><span class="count-pill">${entry.ok ? `${formatNumber(entry.totalRows)} rows · ${formatDuration(entry.durationMs)}` : "error"}</span>`;
+    pane.appendChild(head);
+
+    const body = document.createElement("div");
+    if (!entry.ok) {
+      body.className = "error-box";
+      body.textContent = entry.details ? `${entry.error}\n${JSON.stringify(entry.details, null, 2)}` : entry.error;
+    } else if (!(entry.fields || []).length) {
+      body.className = "grid-shell empty-state";
+      body.textContent = "Query completed with no tabular result.";
+    } else {
+      body.className = "grid-shell";
+      body.innerHTML = buildGridHtml(entry.fields, entry.rows || []);
+      bindCellCopy(body);
+    }
+    pane.appendChild(body);
+    refs.compareGrids.appendChild(pane);
+  }
+}
+
+function resultSummaryText(result) {
+  const rows = result.rows || [];
+  const capNote = result.rowLimit ? ` · capped at ${formatNumber(result.rowLimit)}` : "";
+  return `${formatNumber(rows.length)} shown · ${formatNumber(result.totalRows)} total${capNote} · ${result.durationMs} ms · ${result.jobId || ""}`;
+}
+
+function buildGridHtml(fields, rows) {
+  return `
     <table class="data-grid">
       <thead><tr>${fields.map(field => `<th>${escapeHtml(field.name)}<span class="count-pill">${escapeHtml(field.type || "")}</span></th>`).join("")}</tr></thead>
       <tbody>
@@ -475,6 +626,83 @@ function renderResults(result) {
       </tbody>
     </table>
   `;
+}
+
+function renderResults(result) {
+  showSingleResultsRegion();
+  state.lastResult = result;
+  const fields = result.fields || [];
+  const rows = result.rows || [];
+  refs.resultSummary.textContent = resultSummaryText(result);
+  refs.queryMeta.textContent = result.jobId ? `Job ${result.jobId}` : "";
+  setResultExportEnabled(fields.length > 0);
+  refs.resultsGrid.setAttribute("aria-busy", "false");
+
+  if (!fields.length) {
+    refs.resultsGrid.className = "grid-shell empty-state";
+    refs.resultsGrid.textContent = "Query completed with no tabular result.";
+    return;
+  }
+
+  refs.resultsGrid.className = "grid-shell";
+  refs.resultsGrid.innerHTML = buildGridHtml(fields, rows);
+  bindCellCopy(refs.resultsGrid);
+}
+
+function showSingleResultsRegion() {
+  refs.resultsGrid.classList.remove("hidden");
+  refs.compareDiff.classList.add("hidden");
+  refs.compareGrids.classList.add("hidden");
+}
+
+function showCompareResultsRegion() {
+  refs.resultsGrid.classList.add("hidden");
+  refs.compareDiff.classList.remove("hidden");
+  refs.compareGrids.classList.remove("hidden");
+  setResultExportEnabled(false);
+}
+
+function setResultExportEnabled(enabled) {
+  refs.copyJsonBtn.classList.toggle("hidden", !enabled);
+  refs.downloadCsvBtn.classList.toggle("hidden", !enabled);
+}
+
+function bindCellCopy(container) {
+  container.querySelectorAll("td").forEach(cell => {
+    cell.addEventListener("click", () => {
+      const text = cell.getAttribute("title") || cell.textContent || "";
+      if (text && navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+    });
+  });
+}
+
+function csvCell(value) {
+  const text = formatCellValue(value);
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function resultToCsv(result) {
+  const fields = result.fields || [];
+  const rows = result.rows || [];
+  const header = fields.map(field => csvCell(field.name)).join(",");
+  const body = rows.map(row => fields.map(field => csvCell(row[field.name])).join(",")).join("\n");
+  return body ? `${header}\n${body}\n` : `${header}\n`;
+}
+
+function copyResultJson() {
+  if (!state.lastResult || !navigator.clipboard) return;
+  navigator.clipboard.writeText(JSON.stringify(state.lastResult.rows || [], null, 2)).catch(() => {});
+}
+
+function downloadResultCsv() {
+  if (!state.lastResult) return;
+  const blob = new Blob([resultToCsv(state.lastResult)], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `bq-studio-results-${Date.now()}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function formatCellValue(value) {
@@ -501,6 +729,8 @@ async function previewSelectedTable() {
   const table = state.selectedTable;
   const startedAt = Date.now();
   refs.queryMeta.textContent = "Running";
+  showSingleResultsRegion();
+  setResultExportEnabled(false);
   setResultsPlaceholder("Loading preview...", "Loading preview...", "loading-state");
   try {
     const result = await api(`/api/tables/${encodeURIComponent(dataset)}/${encodeURIComponent(table)}/preview?limit=100`);
@@ -792,16 +1022,27 @@ function renderHistory() {
     return;
   }
   refs.historyList.className = "history-list";
-  refs.historyList.innerHTML = state.history.map(item => `
+  refs.historyList.innerHTML = state.history.map(item => {
+    const status = item.ok ? "OK" : item.detached ? "Detached" : item.canceled ? "Canceled" : "Failed";
+    const label = item.compare ? "compare" : item.source || "query";
+    const compareSpread = item.compare && Array.isArray(item.targets)
+      ? `<span class="muted">${item.targets.map(target => `${escapeHtml(target.id)}: ${target.ok ? `${formatNumber(target.totalRows)} rows / ${Math.round(target.durationMs || 0)} ms` : "error"}`).join(" · ")}</span>`
+      : "";
+    return `
     <article class="history-item">
       <div class="history-meta">
-        <span>${item.ok ? "OK" : item.detached ? "Detached" : item.canceled ? "Canceled" : "Failed"} · ${Math.round(item.durationMs || 0)} ms · ${escapeHtml(item.source || "query")}</span>
+        <span>${status} · ${Math.round(item.durationMs || 0)} ms · ${escapeHtml(label)}</span>
         <span>${new Date(item.createdAt).toLocaleString()}</span>
       </div>
       <pre class="history-sql">${escapeHtml(item.query || item.error || "")}</pre>
-      <button class="secondary-btn" data-history-id="${item.id}">Open</button>
+      ${compareSpread}
+      <div class="button-row">
+        <button class="secondary-btn" data-history-id="${item.id}">Open</button>
+        <button class="secondary-btn" data-history-copy="${item.id}">Copy</button>
+      </div>
     </article>
-  `).join("");
+  `;
+  }).join("");
   refs.historyList.querySelectorAll("[data-history-id]").forEach(button => {
     button.addEventListener("click", () => {
       const item = state.history.find(entry => entry.id === button.dataset.historyId);
@@ -809,6 +1050,12 @@ function renderHistory() {
         refs.sqlEditor.value = item.query;
         activateTab("query");
       }
+    });
+  });
+  refs.historyList.querySelectorAll("[data-history-copy]").forEach(button => {
+    button.addEventListener("click", () => {
+      const item = state.history.find(entry => entry.id === button.dataset.historyCopy);
+      if (item?.query && navigator.clipboard) navigator.clipboard.writeText(item.query).catch(() => {});
     });
   });
 }
@@ -828,6 +1075,21 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+function dispatchRun() {
+  if (state.compareMode) {
+    runCompare();
+  } else {
+    runQuery();
+  }
+}
+
+function setCompareMode(enabled) {
+  state.compareMode = enabled;
+  localStorage.setItem("bqStudioCompareMode", String(enabled));
+  refs.compareModeToggle.checked = enabled;
+  el("runBtn").title = enabled ? "Run on every backend side by side (Cmd/Ctrl+Enter)" : "Run query (Cmd/Ctrl+Enter)";
+}
+
 function bindEvents() {
   document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => activateTab(tab.dataset.tab)));
   refs.targetSelect.addEventListener("change", async () => {
@@ -839,12 +1101,17 @@ function bindEvents() {
     await init();
   });
   el("refreshBtn").addEventListener("click", init);
-  el("runBtn").addEventListener("click", () => runQuery());
+  el("runBtn").addEventListener("click", dispatchRun);
+  el("compareBtn").addEventListener("click", () => runCompare());
+  refs.compareModeToggle.addEventListener("change", () => setCompareMode(refs.compareModeToggle.checked));
   refs.cancelQueryBtn.addEventListener("click", cancelActiveQuery);
   refs.sqlEditor.addEventListener("keydown", event => {
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+    if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key === "Enter") {
       event.preventDefault();
-      runQuery();
+      runCompare();
+    } else if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      dispatchRun();
     } else if ((event.metaKey || event.ctrlKey) && event.key === "/") {
       event.preventDefault();
       toggleSqlLineComment(refs.sqlEditor);
@@ -853,6 +1120,8 @@ function bindEvents() {
   el("previewBtn").addEventListener("click", previewSelectedTable);
   el("sampleCountBtn").addEventListener("click", setCountQuery);
   el("sampleAggregateBtn").addEventListener("click", setAggregateQuery);
+  refs.copyJsonBtn.addEventListener("click", copyResultJson);
+  refs.downloadCsvBtn.addEventListener("click", downloadResultCsv);
   refs.datasetSearch.addEventListener("input", renderDatasets);
   el("inferSchemaBtn").addEventListener("click", inferCsvSchema);
   refs.csvFile.addEventListener("change", inferCsvSchema);
@@ -864,6 +1133,7 @@ function bindEvents() {
     saveHistory();
     renderHistory();
   });
+  setCompareMode(state.compareMode);
 }
 
 async function init() {
@@ -887,6 +1157,10 @@ async function init() {
     }
   } catch (error) {
     if (isStaleLoad(generation)) return;
+    if (!state.datasetsLoaded) {
+      state.datasetsError = error.message;
+      renderDatasets();
+    }
     showError(error.message, error.details);
   }
   if (isStaleLoad(generation)) return;
