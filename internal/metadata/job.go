@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	internaltypes "github.com/goccy/bigquery-emulator/internal/types"
+	"github.com/goccy/bigquery-emulator/internal/sqlvalues"
 	bigqueryv2 "google.golang.org/api/bigquery/v2"
 )
 
@@ -15,7 +15,7 @@ type Job struct {
 	ID        string
 	ProjectID string
 	content   *bigqueryv2.Job
-	response  *internaltypes.QueryResponse
+	response  *sqlvalues.QueryResponse
 	err       error
 	completed bool
 	mu        sync.RWMutex
@@ -30,7 +30,7 @@ func (j *Job) QueryParameters() []*bigqueryv2.QueryParameter {
 	return j.content.Configuration.Query.QueryParameters
 }
 
-func (j *Job) SetResult(ctx context.Context, tx *sql.Tx, response *internaltypes.QueryResponse, err error) error {
+func (j *Job) SetResult(ctx context.Context, tx *sql.Tx, response *sqlvalues.QueryResponse, err error) error {
 	j.response = response
 	j.err = err
 	if err := j.repo.UpdateJob(ctx, tx, j); err != nil {
@@ -43,7 +43,7 @@ func (j *Job) Content() *bigqueryv2.Job {
 	return j.content
 }
 
-func (j *Job) Wait(ctx context.Context) (*internaltypes.QueryResponse, error) {
+func (j *Job) Wait(ctx context.Context) (*sqlvalues.QueryResponse, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
@@ -78,7 +78,7 @@ func (j *Job) Delete(ctx context.Context, tx *sql.Tx) error {
 	return j.repo.DeleteJob(ctx, tx, j)
 }
 
-func NewJob(repo *Repository, projectID, jobID string, content *bigqueryv2.Job, response *internaltypes.QueryResponse, err error) *Job {
+func NewJob(repo *Repository, projectID, jobID string, content *bigqueryv2.Job, response *sqlvalues.QueryResponse, err error) *Job {
 	return &Job{
 		ID:        jobID,
 		ProjectID: projectID,

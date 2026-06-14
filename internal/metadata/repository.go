@@ -10,7 +10,7 @@ import (
 	"github.com/goccy/googlesqlite"
 	bigqueryv2 "google.golang.org/api/bigquery/v2"
 
-	internaltypes "github.com/goccy/bigquery-emulator/internal/types"
+	"github.com/goccy/bigquery-emulator/internal/sqlvalues"
 	"github.com/goccy/bigquery-emulator/types"
 )
 
@@ -353,7 +353,7 @@ func (r *Repository) findJobs(ctx context.Context, tx *sql.Tx, projectID string,
 				return nil, fmt.Errorf("failed to decode metadata content %s: %w", metadata, err)
 			}
 		}
-		var response internaltypes.QueryResponse
+		var response sqlvalues.QueryResponse
 		if len(result) > 0 {
 			if err := json.Unmarshal([]byte(result), &response); err != nil {
 				return nil, fmt.Errorf("failed to decode job response %s: %w", result, err)

@@ -30,7 +30,7 @@ import (
 
 	"github.com/goccy/bigquery-emulator/internal/connection"
 	"github.com/goccy/bigquery-emulator/internal/logger"
-	internaltypes "github.com/goccy/bigquery-emulator/internal/types"
+	"github.com/goccy/bigquery-emulator/internal/sqlvalues"
 	"github.com/goccy/bigquery-emulator/types"
 )
 
@@ -202,7 +202,7 @@ func (s *storageReadServer) buildQuery(status *readStreamStatus) string {
 	return fmt.Sprintf("SELECT %s FROM `%s` %s", columns, status.tableID, condition)
 }
 
-func (s *storageReadServer) query(ctx context.Context, status *readStreamStatus) (*internaltypes.QueryResponse, error) {
+func (s *storageReadServer) query(ctx context.Context, status *readStreamStatus) (*sqlvalues.QueryResponse, error) {
 	conn, err := s.server.connMgr.Connection(ctx, status.projectID, status.datasetID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get connection: %w", err)
@@ -249,7 +249,7 @@ func (s *storageReadServer) getAVROSchema(tableMetadata *bigqueryv2.Table, outpu
 	}, nil
 }
 
-func (s *storageReadServer) sendAVRORows(status *readStreamStatus, response *internaltypes.QueryResponse, stream storagepb.BigQueryRead_ReadRowsServer) error {
+func (s *storageReadServer) sendAVRORows(status *readStreamStatus, response *sqlvalues.QueryResponse, stream storagepb.BigQueryRead_ReadRowsServer) error {
 	codec, err := goavro.NewCodec(status.schemaText)
 	if err != nil {
 		return fmt.Errorf("failed to create avro codec from schema %s: %w", status.schemaText, err)
@@ -333,7 +333,7 @@ func (s *storageReadServer) getSerializedARROWSchema(schema *arrow.Schema) ([]by
 	return buf.Bytes(), nil
 }
 
-func (s *storageReadServer) sendARROWRows(status *readStreamStatus, response *internaltypes.QueryResponse, stream storagepb.BigQueryRead_ReadRowsServer) error {
+func (s *storageReadServer) sendARROWRows(status *readStreamStatus, response *sqlvalues.QueryResponse, stream storagepb.BigQueryRead_ReadRowsServer) error {
 	schema, err := s.getSerializedARROWSchema(status.arrowSchema)
 	if err != nil {
 		return err
