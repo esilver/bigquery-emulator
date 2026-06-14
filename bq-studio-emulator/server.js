@@ -9,6 +9,13 @@ const HOST = process.env.HOST || "127.0.0.1";
 const PROJECT_ID = process.env.BQ_PROJECT_ID || "test";
 const DEFAULT_TARGET_ID = process.env.BQ_DEFAULT_TARGET || "duckdb";
 const QUERY_MAX_RESULTS = parsePositiveInteger(process.env.BQ_STUDIO_QUERY_MAX_RESULTS, 1000);
+// A per-request maxRows from the UI can raise the page size above the default,
+// but never past this hard cap so a stray large value cannot pull an unbounded
+// result set across the proxy. The cap never drops below the configured default.
+const QUERY_MAX_RESULTS_CAP = Math.max(
+  QUERY_MAX_RESULTS,
+  parsePositiveInteger(process.env.BQ_STUDIO_QUERY_MAX_RESULTS_CAP, 50000)
+);
 const TARGETS = [
   {
     id: "duckdb",
@@ -41,6 +48,15 @@ const mimeTypes = {
 function parsePositiveInteger(value, fallback) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+// clampMaxResults resolves the page size for a query. A blank or unparseable
+// request falls back to the configured default, and any valid request is held
+// between 1 row and the hard cap so the selector cannot exceed the ceiling.
+function clampMaxResults(requested, fallback = QUERY_MAX_RESULTS, cap = QUERY_MAX_RESULTS_CAP) {
+  const parsed = Number(requested);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return Math.min(Math.floor(parsed), cap);
 }
 
 function sendJson(res, status, body) {
@@ -227,6 +243,7 @@ function tableRef(target, dataset, table) {
 }
 
 async function runQuery(target, query, options = {}) {
+  const maxResults = clampMaxResults(options.maxResults);
   const startedAt = performance.now();
   const response = await emulatorFetch(`/bigquery/v2/projects/${encodeURIComponent(target.projectId)}/queries`, {
     target,
@@ -236,12 +253,12 @@ async function runQuery(target, query, options = {}) {
     body: JSON.stringify({
       query,
       useLegacySql: false,
-      maxResults: QUERY_MAX_RESULTS,
+      maxResults,
       useQueryCache: Boolean(options.useQueryCache)
     })
   });
   const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
-  return { ...normalizeQueryRows(response), durationMs, rowLimit: QUERY_MAX_RESULTS };
+  return { ...normalizeQueryRows(response), durationMs, rowLimit: maxResults };
 }
 
 function parseMultipart(buffer, contentType) {
@@ -650,7 +667,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/query") {
     const body = await readJson(req);
     if (!body.query?.trim()) return sendError(res, 400, "Query is required");
-    const result = await runQuery(target, body.query, { useQueryCache: body.useQueryCache, signal: requestAbortSignal(req, res, target) });
+    const result = await runQuery(target, body.query, { useQueryCache: body.useQueryCache, maxResults: body.maxResults, signal: requestAbortSignal(req, res, target) });
     if (responseClosed(res)) return;
     return sendJson(res, 200, result);
   }
@@ -661,7 +678,7 @@ async function handleApi(req, res, url) {
     // Run the same statement against every backend so divergence (one engine
     // runs it, the other errors) surfaces per pane instead of failing the call.
     const settled = await Promise.allSettled(
-      TARGETS.map(entry => runQuery(entry, body.query, { useQueryCache: body.useQueryCache }))
+      TARGETS.map(entry => runQuery(entry, body.query, { useQueryCache: body.useQueryCache, maxResults: body.maxResults }))
     );
     const results = settled.map((outcome, index) => {
       const entry = TARGETS[index];
@@ -769,5 +786,6 @@ module.exports = {
   parseMultipart,
   safeIdentifier,
   safeResourceIdentifier,
-  tableRef
+  tableRef,
+  clampMaxResults
 };

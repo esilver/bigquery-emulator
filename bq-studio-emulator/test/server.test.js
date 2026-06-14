@@ -12,7 +12,8 @@ const {
   inferSchema,
   safeIdentifier,
   safeResourceIdentifier,
-  tableRef
+  tableRef,
+  clampMaxResults
 } = require("../server");
 
 test("generated artifact datasets are hidden from the explorer", () => {
@@ -117,6 +118,23 @@ test("resource identifiers preserve BigQuery-safe dashes only where allowed", ()
     tableRef({ projectId: "test" }, "dataset1", "table_a"),
     "`test.dataset1.table_a`"
   );
+});
+
+test("clampMaxResults falls back on blank input and holds the cap", () => {
+  // A blank, zero, or unparseable request keeps the configured default.
+  assert.equal(clampMaxResults(undefined, 1000, 50000), 1000);
+  assert.equal(clampMaxResults("", 1000, 50000), 1000);
+  assert.equal(clampMaxResults(0, 1000, 50000), 1000);
+  assert.equal(clampMaxResults(-5, 1000, 50000), 1000);
+  assert.equal(clampMaxResults("abc", 1000, 50000), 1000);
+
+  // A valid request raises the page size but never past the cap, and a
+  // fractional value floors to a whole row count.
+  assert.equal(clampMaxResults(100, 1000, 50000), 100);
+  assert.equal(clampMaxResults(10000, 1000, 50000), 10000);
+  assert.equal(clampMaxResults(999999, 1000, 50000), 50000);
+  assert.equal(clampMaxResults("2500", 1000, 50000), 2500);
+  assert.equal(clampMaxResults(12.9, 1000, 50000), 12);
 });
 
 test("normalizeQueryValue decodes scalars, repeated scalars, and nested structs", () => {
