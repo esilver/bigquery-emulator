@@ -1,16 +1,8 @@
 # BigQuery feature support matrix
 
-This document tracks, feature by feature, what [`bigquery-emulator`](https://github.com/esilver/bigquery-emulator) supports.
+What [`bigquery-emulator`](https://github.com/esilver/bigquery-emulator) supports, feature by feature.
 
-BigQuery is a large product, so this matrix is organized to be **MECE** (mutually
-exclusive, collectively exhaustive): every BigQuery feature area appears in
-exactly one section, and the sections together cover the whole product surface.
-The top-level grouping follows the structure of the official
-[BigQuery documentation](https://docs.cloud.google.com/bigquery/docs) and the
-[BigQuery REST API reference](https://docs.cloud.google.com/bigquery/docs/reference/rest).
-
-If a feature you need is missing or wrong here, please open an
-[Issue](https://github.com/esilver/bigquery-emulator/issues).
+The matrix is **MECE** (mutually exclusive, collectively exhaustive): every BigQuery feature area appears in exactly one section, and the sections together cover the whole product. The grouping follows the official [BigQuery docs](https://docs.cloud.google.com/bigquery/docs) and [REST API reference](https://docs.cloud.google.com/bigquery/docs/reference/rest). If something you need is missing or wrong, open an [Issue](https://github.com/esilver/bigquery-emulator/issues).
 
 **Legend**
 
@@ -26,8 +18,7 @@ If a feature you need is missing or wrong here, please open an
 
 ## 1. REST API
 
-The emulator implements the [BigQuery API v2](https://docs.cloud.google.com/bigquery/docs/reference/rest)
-REST surface. The tables below list every documented resource and method.
+The [BigQuery API v2](https://docs.cloud.google.com/bigquery/docs/reference/rest) REST surface, by documented resource and method.
 
 ### 1.1 `datasets`
 
@@ -185,11 +176,7 @@ There is no `models.insert` in the BigQuery API — models are created with
 
 ## 6. Query language (GoogleSQL)
 
-Query execution is delegated to [`googlesqlite`](https://github.com/esilver/googlesqlite),
-which parses and analyzes [GoogleSQL](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/introduction)
-and runs it against the embedded backend linked into this build. The table below
-records what the **emulator** wires up; the authoritative, per-function and
-per-type matrix lives in the [`googlesqlite` status](https://github.com/esilver/googlesqlite#status).
+Query execution is delegated to [`googlesqlite`](https://github.com/esilver/googlesqlite), which parses and analyzes [GoogleSQL](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/introduction) and runs it against the embedded backend. This table records what the **emulator** wires up. The authoritative per-function and per-type matrix lives in the [`googlesqlite` status](https://github.com/esilver/googlesqlite#status).
 
 | Feature | Status | Notes |
 | --- | --- | --- |
@@ -238,7 +225,7 @@ per-type matrix lives in the [`googlesqlite` status](https://github.com/esilver/
 
 ## 9. BigQuery Storage API
 
-The gRPC [BigQuery Storage API](https://docs.cloud.google.com/bigquery/docs/reference/storage).
+The gRPC [BigQuery Storage API](https://docs.cloud.google.com/bigquery/docs/reference/storage):
 
 | Feature | Status | Notes |
 | --- | --- | --- |
@@ -267,8 +254,7 @@ The gRPC [BigQuery Storage API](https://docs.cloud.google.com/bigquery/docs/refe
 
 ## 11. Emulator-specific features
 
-Capabilities that are not part of the BigQuery product but are provided by this
-emulator for local development and testing.
+Capabilities the emulator adds for local development and testing, outside the BigQuery product surface.
 
 | Feature | Status | Notes |
 | --- | --- | --- |
