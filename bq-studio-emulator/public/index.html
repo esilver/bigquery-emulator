@@ -4,13 +4,17 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>BQ Studio Emulator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20,400,0,0&display=swap">
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
         <div class="brand">
-          <span class="brand-mark">BQ</span>
+          <span class="brand-mark"><span class="material-symbols-outlined" aria-hidden="true">database</span></span>
           <div>
             <h1>BQ Studio Emulator</h1>
             <p id="connectionText">Connecting...</p>
@@ -18,10 +22,8 @@
         </div>
         <div class="topbar-actions">
           <select id="targetSelect" class="target-select" aria-label="Emulator backend"></select>
-          <span id="statusBadge" class="status pending">Checking</span>
-          <button id="refreshBtn" class="icon-btn" title="Refresh metadata">Refresh</button>
-          <button id="runBtn" class="primary-btn" title="Run query">Run</button>
-          <button id="cancelQueryBtn" class="danger-btn hidden" title="Cancel running query">Cancel</button>
+          <span id="statusBadge" class="status pending" role="status">Checking</span>
+          <button id="refreshBtn" class="icon-btn" title="Refresh metadata"><span class="material-symbols-outlined" aria-hidden="true">refresh</span>Refresh</button>
         </div>
       </header>
 
@@ -29,7 +31,10 @@
         <aside class="sidebar">
           <div class="sidebar-header">
             <h2>Explorer</h2>
-            <input id="datasetSearch" type="search" placeholder="Search datasets">
+            <div class="search-field">
+              <span class="material-symbols-outlined" aria-hidden="true">search</span>
+              <input id="datasetSearch" type="search" placeholder="Search datasets">
+            </div>
           </div>
           <div id="datasetList" class="dataset-list"></div>
         </aside>
@@ -44,6 +49,15 @@
 
           <section id="queryTab" class="tab-panel active">
             <div class="editor-toolbar">
+              <div class="run-group">
+                <button id="runBtn" class="run-btn" title="Run query (Cmd/Ctrl+Enter)">Run</button>
+                <button id="compareBtn" class="secondary-btn" title="Run on every backend side by side (Cmd/Ctrl+Shift+Enter)">Compare</button>
+                <button id="cancelQueryBtn" class="danger-btn hidden" title="Cancel running query">Cancel</button>
+                <label class="compare-toggle" title="Route Run through both backends">
+                  <input id="compareModeToggle" type="checkbox">
+                  <span>Compare mode</span>
+                </label>
+              </div>
               <div class="query-title">
                 <span id="activeTableLabel">No table selected</span>
                 <span id="queryMeta" class="muted"></span>
@@ -58,13 +72,19 @@
 FROM `test.dataset1.table_a`
 ORDER BY id
 LIMIT 100</textarea>
-            <div id="queryError" class="error-box hidden"></div>
+            <div id="queryError" class="error-box hidden" aria-live="assertive"></div>
             <section class="results-panel">
               <div class="panel-title">
                 <h2>Results</h2>
-                <span id="resultSummary" class="muted">No results</span>
+                <div class="results-actions">
+                  <span id="resultSummary" class="muted" aria-live="polite">No results</span>
+                  <button id="copyJsonBtn" class="secondary-btn hidden" title="Copy result rows as JSON">Copy JSON</button>
+                  <button id="downloadCsvBtn" class="secondary-btn hidden" title="Download result rows as CSV">Download CSV</button>
+                </div>
               </div>
-              <div id="resultsGrid" class="grid-shell empty-state">Run a query to populate results.</div>
+              <div id="resultsGrid" class="grid-shell empty-state" aria-busy="false">Run a query to populate results.</div>
+              <div id="compareDiff" class="compare-diff hidden"></div>
+              <div id="compareGrids" class="compare-grids hidden"></div>
             </section>
           </section>
 

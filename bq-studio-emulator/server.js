@@ -655,6 +655,33 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, result);
   }
 
+  if (req.method === "POST" && url.pathname === "/api/query/compare") {
+    const body = await readJson(req);
+    if (!body.query?.trim()) return sendError(res, 400, "Query is required");
+    // Run the same statement against every backend so divergence (one engine
+    // runs it, the other errors) surfaces per pane instead of failing the call.
+    const settled = await Promise.allSettled(
+      TARGETS.map(entry => runQuery(entry, body.query, { useQueryCache: body.useQueryCache }))
+    );
+    const results = settled.map((outcome, index) => {
+      const entry = TARGETS[index];
+      if (outcome.status === "fulfilled") {
+        return { targetId: entry.id, targetLabel: entry.label, ok: true, ...outcome.value };
+      }
+      const reason = outcome.reason || {};
+      return {
+        targetId: entry.id,
+        targetLabel: entry.label,
+        ok: false,
+        error: reason.message || "Query failed",
+        details: reason.details,
+        durationMs: null
+      };
+    });
+    if (responseClosed(res)) return;
+    return sendJson(res, 200, { results });
+  }
+
   if (req.method === "POST" && url.pathname === "/api/load/csv") {
     return handleCsvLoad(req, res, target);
   }
@@ -730,6 +757,7 @@ module.exports = {
   createServer,
   startServer,
   targetById,
+  targetFromUrl,
   visibleDatasets,
   isGeneratedArtifactDataset,
   normalizeQueryRows,

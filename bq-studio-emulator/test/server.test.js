@@ -5,6 +5,7 @@ const {
   visibleDatasets,
   isGeneratedArtifactDataset,
   normalizeQueryRows,
+  normalizeQueryValue,
   splitCsvLine,
   splitCsvRecords,
   prepareCsvUpload,
@@ -116,4 +117,33 @@ test("resource identifiers preserve BigQuery-safe dashes only where allowed", ()
     tableRef({ projectId: "test" }, "dataset1", "table_a"),
     "`test.dataset1.table_a`"
   );
+});
+
+test("normalizeQueryValue decodes scalars, repeated scalars, and nested structs", () => {
+  assert.equal(normalizeQueryValue({ name: "n", type: "INTEGER" }, null), null);
+  assert.equal(normalizeQueryValue({ name: "n", type: "INTEGER" }, undefined), null);
+  assert.equal(normalizeQueryValue({ name: "n", type: "STRING" }, "hello"), "hello");
+
+  assert.deepEqual(
+    normalizeQueryValue({ name: "tags", type: "STRING", mode: "REPEATED" }, { v: [{ v: "a" }, { v: "b" }] }),
+    ["a", "b"]
+  );
+
+  assert.deepEqual(
+    normalizeQueryValue({ name: "tags", type: "STRING", mode: "REPEATED" }, { v: [] }),
+    []
+  );
+
+  const nestedStruct = normalizeQueryValue(
+    {
+      name: "outer",
+      type: "STRUCT",
+      fields: [
+        { name: "id", type: "INTEGER" },
+        { name: "inner", type: "STRUCT", fields: [{ name: "label", type: "STRING" }] }
+      ]
+    },
+    { v: { f: [{ v: "7" }, { v: { f: [{ v: "deep" }] } }] } }
+  );
+  assert.deepEqual(nestedStruct, { id: "7", inner: { label: "deep" } });
 });

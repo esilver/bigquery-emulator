@@ -20,6 +20,9 @@ jobs:
     - name: check BQ Studio
       run: npm run check
       working-directory: bq-studio-emulator
+    - name: smoke BQ Studio
+      run: npm run smoke
+      working-directory: bq-studio-emulator
 
   build:
     name: Build
