@@ -17,16 +17,16 @@ const {
 test("generated artifact datasets are hidden from the explorer", () => {
   assert.equal(isGeneratedArtifactDataset("bqjob_r123"), true);
   assert.equal(isGeneratedArtifactDataset("04c352ea-ccf5-4326-8ca3-97a6759858e1"), true);
-  assert.equal(isGeneratedArtifactDataset("sample_audit"), false);
+  assert.equal(isGeneratedArtifactDataset("dataset1"), false);
 
-  const target = { projectId: "example-project" };
+  const target = { projectId: "test" };
   const datasets = visibleDatasets([
-    { datasetReference: { projectId: "example-project", datasetId: "sample_audit" }, location: "US" },
-    { datasetReference: { projectId: "example-project", datasetId: "bqjob_r123" }, location: "US" },
-    { datasetReference: { projectId: "example-project", datasetId: "04c352ea-ccf5-4326-8ca3-97a6759858e1" }, location: "US" }
+    { datasetReference: { projectId: "test", datasetId: "dataset1" }, location: "US" },
+    { datasetReference: { projectId: "test", datasetId: "bqjob_r123" }, location: "US" },
+    { datasetReference: { projectId: "test", datasetId: "04c352ea-ccf5-4326-8ca3-97a6759858e1" }, location: "US" }
   ], target);
 
-  assert.deepEqual(datasets.map(dataset => dataset.id), ["sample_audit"]);
+  assert.deepEqual(datasets.map(dataset => dataset.id), ["dataset1"]);
 });
 
 test("query row normalization decodes repeated records", () => {
@@ -108,12 +108,12 @@ test("report-style CSV inference skips title rows and trims footer rows", () => 
 });
 
 test("resource identifiers preserve BigQuery-safe dashes only where allowed", () => {
-  assert.equal(safeIdentifier("sample_audit", "dataset"), "sample_audit");
+  assert.equal(safeIdentifier("dataset1", "dataset"), "dataset1");
   assert.throws(() => safeIdentifier("bad-dataset", "dataset"), /Invalid dataset/);
   assert.equal(safeResourceIdentifier("04c352ea-ccf5", "dataset"), "04c352ea-ccf5");
 
   assert.equal(
-    tableRef({ projectId: "example-project" }, "sample_audit", "events_1m"),
-    "`example-project.sample_audit.events_1m`"
+    tableRef({ projectId: "test" }, "dataset1", "table_a"),
+    "`test.dataset1.table_a`"
   );
 });

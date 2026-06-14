@@ -61,6 +61,10 @@ The emulator runs the standard analytics benchmark suites against the DuckDB-bac
 
 Larger scale factors stream through the load path, so corpus size scales with available disk.
 
+# BQ Studio workbench
+
+[`bq-studio-emulator/`](./bq-studio-emulator/) is a local BigQuery Studio-style workbench that fronts both this DuckDB-backed fork and the upstream SQLite-backed build at the same time. It offers a dataset explorer, a SQL editor with a results grid, a CSV loader, and a benchmark tab, with a backend switch in the top bar so you can run the same query against either engine and compare results and timings. `cd bq-studio-emulator && docker compose up` brings up both emulators plus the UI with a shared sample dataset, then open `http://127.0.0.1:5177`. See its [README](./bq-studio-emulator/README.md) for the manual path and the TPC-H, ClickBench, and NYC Taxi sample loaders.
+
 # Goals
 
 The goal of this project is to build a server that behaves exactly like BigQuery from the BigQuery client's perspective. To do so, we need to support all features present in BigQuery ( Model API / Connection API / INFORMATION SCHEMA etc.. ) in addition to evaluating GoogleSQL.

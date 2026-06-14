@@ -1,0 +1,8 @@
+node_modules/
+
+# Seeder working directories default to the OS temp dir, but guard against
+# local overrides or large corpus files landing in the repo.
+*.parquet
+*.csv
+*.db
+bq-studio-*/

@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "check": "node --check server.js && node --check public/app.js && node --check scripts/seed-sqlite-storage.mjs && node --check scripts/seed-nyc-taxi-duckdb.mjs && npm test",
+    "check": "node --check server.js && node --check public/app.js && for f in scripts/*.mjs; do node --check \"$f\" || exit 1; done && npm test",
     "test": "node --test test/*.test.js",
     "seed:sqlite": "node scripts/seed-sqlite-storage.mjs",
     "seed:nyc-taxi": "node scripts/seed-nyc-taxi-duckdb.mjs",

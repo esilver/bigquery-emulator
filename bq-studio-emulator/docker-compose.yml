@@ -1,0 +1,64 @@
+# One-command side-by-side: the DuckDB-backed fork and the upstream SQLite
+# build, both seeded with the same bundled sample, fronted by the BQ Studio UI.
+#
+#   docker compose up
+#   open http://127.0.0.1:5177
+#
+# The UI lands on `test.dataset1.table_a`, which both backends serve from the
+# mounted sample, so the first query returns rows on either engine. Ports are
+# published to 127.0.0.1 only: this is an explicitly local workbench.
+
+services:
+  duckdb-emulator:
+    image: ghcr.io/esilver/bigquery-emulator:latest
+    command:
+      - --project=test
+      - --host=0.0.0.0
+      - --port=9050
+      - --data-from-yaml=/work/sample.yaml
+    ports:
+      - "127.0.0.1:9050:9050"
+
+  sqlite-emulator:
+    image: ghcr.io/goccy/bigquery-emulator:latest
+    command:
+      - --project=test
+      - --host=0.0.0.0
+      - --port=9051
+      - --data-from-yaml=/work/sample.yaml
+    # The upstream image does not bundle the sample, so mount the repo copy that
+    # the fork image bakes in at build time. Read-only: the loader only reads it.
+    volumes:
+      - ../server/testdata/data.yaml:/work/sample.yaml:ro
+    ports:
+      - "127.0.0.1:9051:9051"
+
+  studio:
+    image: node:20-alpine
+    working_dir: /app
+    # Wait for both backends to answer (the node image guarantees node is
+    # present, so the gate does not depend on a shell in the emulator images),
+    # then start the proxy.
+    command:
+      - node
+      - --input-type=module
+      - -e
+      - >-
+        import { waitForEmulator } from "./scripts/seed-utils.mjs";
+        import { spawn } from "node:child_process";
+        await waitForEmulator(process.env.BQ_DUCKDB_EMULATOR_URL, { projectId: "test" });
+        await waitForEmulator(process.env.BQ_SQLITE_EMULATOR_URL, { projectId: "test" });
+        spawn("node", ["server.js"], { stdio: "inherit" });
+    environment:
+      HOST: 0.0.0.0
+      PORT: "5177"
+      BQ_PROJECT_ID: test
+      BQ_DUCKDB_EMULATOR_URL: http://duckdb-emulator:9050
+      BQ_SQLITE_EMULATOR_URL: http://sqlite-emulator:9051
+    volumes:
+      - .:/app
+    ports:
+      - "127.0.0.1:5177:5177"
+    depends_on:
+      - duckdb-emulator
+      - sqlite-emulator
