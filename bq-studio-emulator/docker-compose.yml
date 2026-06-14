@@ -16,6 +16,11 @@ services:
       - --host=0.0.0.0
       - --port=9050
       - --data-from-yaml=/work/sample.yaml
+    # The fork image bundles this sample at /work/sample.yaml. Mount the repo
+    # copy as well so the workbench works against any published image, including
+    # one built before the bundle landed. Read-only: the loader only reads it.
+    volumes:
+      - ../server/testdata/data.yaml:/work/sample.yaml:ro
     ports:
       - "127.0.0.1:9050:9050"
 
