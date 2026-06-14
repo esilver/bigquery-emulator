@@ -30,4 +30,8 @@ COPY --from=builder /go/bin/bigquery-emulator /bin/bigquery-emulator
 
 WORKDIR /work
 
+# Bundle the tiny sample dataset so the quickstart returns a real query
+# result with one command (see README quickstart, --data-from-yaml).
+COPY --from=builder /build/server/testdata/data.yaml /work/sample.yaml
+
 ENTRYPOINT ["/bin/bigquery-emulator"]

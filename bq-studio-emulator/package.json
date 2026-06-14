@@ -9,7 +9,9 @@
     "check": "node --check server.js && node --check public/app.js && node --check scripts/seed-sqlite-storage.mjs && node --check scripts/seed-nyc-taxi-duckdb.mjs && npm test",
     "test": "node --test test/*.test.js",
     "seed:sqlite": "node scripts/seed-sqlite-storage.mjs",
-    "seed:nyc-taxi": "node scripts/seed-nyc-taxi-duckdb.mjs"
+    "seed:nyc-taxi": "node scripts/seed-nyc-taxi-duckdb.mjs",
+    "seed:tpch": "node scripts/seed-tpch.mjs",
+    "seed:clickbench": "node scripts/seed-clickbench.mjs"
   },
   "engines": {
     "node": ">=20"
