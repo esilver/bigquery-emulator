@@ -628,6 +628,10 @@ func csvColumnsFromSchema(fields []*bigqueryv2.TableFieldSchema) []*types.Column
 
 func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentRequest) error {
 	load := r.job.Content().Configuration.Load
+	// BigQuery type names are case-insensitive; clients (notably dbt's seed
+	// loader) may send lowercase types like "int64". Upper-case them so the
+	// GoogleSQL analyzer recognizes them instead of failing with TYPE_UNKNOWN.
+	normalizeSchemaFieldTypes(load.Schema)
 	tableRef := load.DestinationTable
 	if tableRef == nil {
 		return errInvalid("load job is missing configuration.load.destinationTable")
@@ -641,10 +645,19 @@ func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentReque
 	// freshly created one is empty regardless.
 	tableExisted := table != nil
 
+	// CSV is the default source format for a load job: clients that load CSV
+	// (notably the Python client used by dbt seeds) omit sourceFormat entirely.
+	// Treat an empty format as CSV so the CSV schema-inference and row-loading
+	// paths below apply.
+	sourceFormat := load.SourceFormat
+	if sourceFormat == "" {
+		sourceFormat = "CSV"
+	}
+
 	// Read CSV content up front so an autodetect load can infer the schema
 	// before the destination table is created.
 	var csvRecords [][]string
-	if load.SourceFormat == "CSV" {
+	if sourceFormat == "CSV" {
 		if load.SkipLeadingRows < 0 {
 			return errInvalid("configuration.load.skipLeadingRows must be non-negative")
 		}
@@ -653,7 +666,15 @@ func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentReque
 			return fmt.Errorf("failed to read csv: %w", err)
 		}
 		csvRecords = records
-		if !tableExisted && load.Schema == nil && load.Autodetect {
+		// A load needs a fully typed schema. Infer one from the CSV when the
+		// client either requested autodetect (no schema) or supplied a schema
+		// whose field types are unspecified. dbt's seed emits the latter: it
+		// sends column names with empty field types and relies on BigQuery to
+		// autodetect the types. Without this the unspecified types reach the
+		// engine as TYPE_UNKNOWN and the CREATE TABLE fails.
+		needsInference := !tableExisted &&
+			((load.Schema == nil && load.Autodetect) || schemaHasUnspecifiedTypes(load.Schema))
+		if needsInference {
 			var schema *bigqueryv2.TableSchema
 			var err error
 			if load.SkipLeadingRows == 0 && hasForceSendField(load.ForceSendFields, "SkipLeadingRows") {
@@ -669,7 +690,10 @@ func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentReque
 			if err != nil {
 				return err
 			}
-			load.Schema = schema
+			// When the client supplied column names (with blank types), keep
+			// that schema's field order and names and only fill the types from
+			// the inferred schema.
+			load.Schema = mergeInferredTypes(load.Schema, schema)
 		}
 	}
 	if table == nil {
@@ -706,7 +730,6 @@ func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentReque
 		columnToType[field.Name] = types.Type(field.Type)
 	}
 
-	sourceFormat := load.SourceFormat
 	columns := []*types.Column{}
 	data := types.Data{}
 
@@ -1394,6 +1417,25 @@ func (h *jobsGetQueryResultsHandler) Handle(ctx context.Context, r *jobsGetQuery
 	if err != nil {
 		return nil, err
 	}
+	// A DDL/DML statement (CREATE SCHEMA, etc.) completes with no result set,
+	// so its stored response is nil. The query-results resource must still be
+	// valid: the schema is serialized without omitempty, so a nil schema would
+	// emit "schema": null, which the Google BigQuery clients parse with
+	// .get("fields") and crash on. Return an empty schema and no rows instead.
+	if response == nil {
+		return &internaltypes.GetQueryResultsResponse{
+			JobReference: &bigqueryv2.JobReference{
+				ProjectId: r.project.ID,
+				JobId:     r.job.ID,
+			},
+			Schema:      &bigqueryv2.TableSchema{Fields: []*bigqueryv2.TableFieldSchema{}},
+			JobComplete: true,
+		}, nil
+	}
+	schema := response.Schema
+	if schema == nil {
+		schema = &bigqueryv2.TableSchema{Fields: []*bigqueryv2.TableFieldSchema{}}
+	}
 	rows := internaltypes.Format(response.Schema, response.Rows, r.useInt64Timestamp)
 
 	// Honor maxResults/startIndex paging. Clients (notably the Python one)
@@ -1422,7 +1464,7 @@ func (h *jobsGetQueryResultsHandler) Handle(ctx context.Context, r *jobsGetQuery
 			ProjectId: r.project.ID,
 			JobId:     r.job.ID,
 		},
-		Schema:      response.Schema,
+		Schema:      schema,
 		TotalRows:   response.TotalRows,
 		JobComplete: true,
 		PageToken:   pageToken,
@@ -1865,6 +1907,14 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 		}
 		return nil, fmt.Errorf("unspecified job configuration query")
 	}
+	// CREATE/DROP SCHEMA operate on dataset metadata, not table content. The
+	// SQL engine treats CREATE SCHEMA as a no-op and rejects DROP SCHEMA, so
+	// dbt's "CREATE SCHEMA IF NOT EXISTS" would never actually create the
+	// dataset. Handle these at the metadata layer and report the matching
+	// statementType.
+	if ddl, ok := parseSchemaDDL(job.Configuration.Query.Query); ok {
+		return h.handleSchemaDDL(ctx, r, ddl)
+	}
 	conn, err := r.server.connMgr.Connection(ctx, r.project.ID, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get connection: %w", err)
@@ -1938,6 +1988,14 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 				return nil, fmt.Errorf("failed to add query result to dynamic destination table: %w", err)
 			}
 			job.Configuration.Query.DestinationTable = destRef
+		} else if response != nil && job.Configuration.Query.DestinationTable == nil {
+			// CREATE TABLE AS SELECT produces no result schema but does create a
+			// table (reported via ChangedCatalog). BigQuery advertises that
+			// table as the job's destination, and dbt reads its row count
+			// through configuration.query.destinationTable, so surface it here.
+			if ref := destinationFromChangedCatalog(response.ChangedCatalog); ref != nil {
+				job.Configuration.Query.DestinationTable = ref
+			}
 		}
 	}
 	job.Kind = "bigquery#job"
@@ -1960,10 +2018,14 @@ func (h *jobsInsertHandler) Handle(ctx context.Context, r *jobsInsertRequest) (*
 	if response != nil {
 		totalBytes = response.TotalBytes
 	}
+	statementType := classifyStatementType(job.Configuration.Query.Query)
+	if statementType == "CREATE_TABLE" && isCreateTableAsSelect(job.Configuration.Query.Query) {
+		statementType = "CREATE_TABLE_AS_SELECT"
+	}
 	job.Statistics = &bigqueryv2.JobStatistics{
 		Query: &bigqueryv2.JobStatistics2{
 			CacheHit:            false,
-			StatementType:       "SELECT",
+			StatementType:       statementType,
 			TotalBytesBilled:    totalBytes,
 			TotalBytesProcessed: totalBytes,
 		},
@@ -2012,6 +2074,127 @@ func syncCatalog(ctx context.Context, server *Server, cat *googlesqlite.ChangedC
 		}
 	}
 	return nil
+}
+
+// destinationFromChangedCatalog returns a reference to the single table created
+// by a DDL statement (e.g. CREATE TABLE AS SELECT), or nil when the statement
+// added zero or several tables. BigQuery reports the CTAS target as the job's
+// destination table.
+func destinationFromChangedCatalog(cat *googlesqlite.ChangedCatalog) *bigqueryv2.TableReference {
+	if cat == nil || len(cat.Table.Added) != 1 {
+		return nil
+	}
+	path := cat.Table.Added[0].NamePath
+	if len(path) != 3 {
+		return nil
+	}
+	return &bigqueryv2.TableReference{
+		ProjectId: path[0],
+		DatasetId: path[1],
+		TableId:   path[2],
+	}
+}
+
+// handleSchemaDDL services CREATE/DROP SCHEMA at the metadata layer (the SQL
+// engine no-ops CREATE SCHEMA and rejects DROP SCHEMA). It creates or deletes
+// the dataset, records a completed QUERY job with the matching statementType,
+// and returns the job exactly like a normal query would.
+func (h *jobsInsertHandler) handleSchemaDDL(ctx context.Context, r *jobsInsertRequest, ddl schemaDDL) (*bigqueryv2.Job, error) {
+	if ddl.projectID != "" && ddl.projectID != r.project.ID {
+		return nil, errInvalid(fmt.Sprintf(
+			"schema project %q does not match request project %q", ddl.projectID, r.project.ID))
+	}
+	conn, err := r.server.connMgr.Connection(ctx, r.project.ID, ddl.datasetID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get connection: %w", err)
+	}
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start transaction: %w", err)
+	}
+	defer tx.RollbackIfNotCommitted()
+
+	startTime := time.Now()
+	var jobErr error
+	statementType := "CREATE_SCHEMA"
+	existing := r.project.Dataset(ddl.datasetID)
+	if ddl.isCreate {
+		if existing != nil {
+			if !ddl.ifNotExists {
+				jobErr = fmt.Errorf("dataset %q already exists", ddl.datasetID)
+			}
+		} else {
+			dataset := metadata.NewDataset(
+				r.server.metaRepo,
+				r.project.ID,
+				ddl.datasetID,
+				&bigqueryv2.Dataset{
+					Id: fmt.Sprintf("%s:%s", r.project.ID, ddl.datasetID),
+					DatasetReference: &bigqueryv2.DatasetReference{
+						ProjectId: r.project.ID,
+						DatasetId: ddl.datasetID,
+					},
+				},
+				nil, nil, nil,
+			)
+			if err := r.project.AddDataset(ctx, tx.Tx(), dataset); err != nil {
+				jobErr = err
+			}
+		}
+	} else {
+		statementType = "DROP_SCHEMA"
+		if existing == nil {
+			if !ddl.ifExists {
+				jobErr = errNotFound(fmt.Sprintf("Not found: Dataset %s:%s", r.project.ID, ddl.datasetID))
+			}
+		} else if err := r.project.DeleteDataset(ctx, tx.Tx(), ddl.datasetID); err != nil {
+			jobErr = err
+		}
+	}
+	endTime := time.Now()
+
+	job := r.job
+	if job.JobReference.JobId == "" {
+		job.JobReference.JobId = randomID()
+	}
+	job.Kind = "bigquery#job"
+	job.Configuration.JobType = "QUERY"
+	job.Configuration.Query.Priority = "INTERACTIVE"
+	job.SelfLink = fmt.Sprintf(
+		"http://%s/bigquery/v2/projects/%s/jobs/%s",
+		r.server.httpServer.Addr,
+		r.project.ID,
+		job.JobReference.JobId,
+	)
+	status := &bigqueryv2.JobStatus{State: "DONE"}
+	if jobErr != nil {
+		internalErr := errJobInternalError(jobErr.Error())
+		status.ErrorResult = internalErr.ErrorProto()
+		status.Errors = []*bigqueryv2.ErrorProto{internalErr.ErrorProto()}
+	}
+	job.Status = status
+	job.Statistics = &bigqueryv2.JobStatistics{
+		Query: &bigqueryv2.JobStatistics2{
+			CacheHit:      false,
+			StatementType: statementType,
+		},
+		CreationTime: startTime.Unix(),
+		StartTime:    startTime.Unix(),
+		EndTime:      endTime.Unix(),
+	}
+	if err := r.project.AddJob(
+		ctx,
+		tx.Tx(),
+		metadata.NewJob(r.server.metaRepo, r.project.ID, job.JobReference.JobId, job, nil, jobErr),
+	); err != nil {
+		return nil, fmt.Errorf("failed to add job: %w", err)
+	}
+	if !job.Configuration.DryRun {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("failed to commit job: %w", err)
+		}
+	}
+	return job, nil
 }
 
 func addTableMetadata(ctx context.Context, server *Server, spec *googlesqlite.TableSpec) error {
