@@ -12,8 +12,8 @@
   --green: #188038;
   --red: #b3261e;
   --amber: #9a6500;
-  --code-bg: #0f1720;
-  --code-text: #d8e2f0;
+  --editor-bg: #fbfcfe;
+  --editor-text: #202124;
   --shadow: 0 1px 2px rgba(15, 23, 32, 0.08);
   font-family: "Google Sans", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
@@ -383,6 +383,11 @@ h2 {
   background: var(--surface-alt);
 }
 
+.dataset-button.active,
+.table-button.active {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
 .dataset-name,
 .table-name {
   overflow: hidden;
@@ -490,8 +495,8 @@ h2 {
   border-radius: 0;
   padding: 14px;
   resize: none;
-  background: var(--code-bg);
-  color: var(--code-text);
+  background: var(--editor-bg);
+  color: var(--editor-text);
   font-family: "Roboto Mono", "SFMono-Regular", Consolas, monospace;
   line-height: 1.5;
 }
@@ -520,9 +525,32 @@ h2 {
 
 .results-panel {
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   min-height: 0;
   background: var(--surface);
+}
+
+.result-subtabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.result-subtab {
+  border: 0;
+  border-radius: 0;
+  height: 32px;
+  padding: 0 12px;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+
+.result-subtab.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+  font-weight: 500;
 }
 
 .grid-shell {
@@ -530,13 +558,42 @@ h2 {
   min-width: 0;
 }
 
+.results-panel > .grid-shell,
+.result-json,
+.result-execution {
+  grid-row: 4;
+}
+
+.result-json {
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  min-width: 0;
+  font-family: "Roboto Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #263442;
+  white-space: pre;
+}
+
+.result-execution {
+  padding: 12px;
+  overflow: auto;
+  min-width: 0;
+}
+
 .compare-diff {
+  grid-row: 3;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--line);
   background: #f8f9fa;
+}
+
+.results-panel > .compare-grids {
+  grid-row: 4;
 }
 
 .compare-chip {
@@ -625,13 +682,16 @@ table.data-grid {
 .data-grid th,
 .data-grid td {
   border-bottom: 1px solid var(--line);
-  border-right: 1px solid var(--line);
-  padding: 6px 8px;
+  padding: 8px 12px;
   max-width: 360px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: left;
+}
+
+.data-grid tbody tr:hover {
+  background: #f8f9fa;
 }
 
 .data-grid td.nested-cell {
