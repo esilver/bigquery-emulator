@@ -1,3 +1,7 @@
+// Package types holds the public, consumer-facing model types (Project,
+// Dataset, Table, Routine) used to build and seed an emulator from Go, for
+// example as the values passed to server.StructSource. The internal
+// request/response payload types live in the separate internal/types package.
 package types
 
 import (

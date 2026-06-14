@@ -1,3 +1,8 @@
+// Package types holds the internal wire payload types (query result and
+// response shapes such as GetQueryResultsResponse, QueryResponse, and
+// TableRow) that the server marshals to BigQuery REST clients. Importers
+// alias it as internaltypes to keep it distinct from the public
+// github.com/goccy/bigquery-emulator/types package it builds on.
 package types
 
 import (

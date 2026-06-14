@@ -3321,6 +3321,9 @@ func (h *tablesInsertHandler) Handle(ctx context.Context, r *tablesInsertRequest
 	return table, nil
 }
 
+// ===== Fork: external-table =====
+// The divider above marks upstream surface. handleExternalTable is fork code.
+
 // handleExternalTable materializes an external table's source data into a
 // backing table so the table is registered with the query engine and can be
 // queried. Real BigQuery reads an external table live on every query; the

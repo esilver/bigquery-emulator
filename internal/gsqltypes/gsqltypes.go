@@ -3,6 +3,11 @@
 // (INT64 etc.), and their numeric values track the googlesql.TypeKind enum
 // exposed by the googlesqlite driver, so a `*googlesqlite.ColumnType.Kind`
 // can be cast directly to TypeKind.
+//
+// This enum is hand-kept as a verbatim mirror of googlesql.TypeKind so the
+// pure-Go build avoids pulling in the cgo zetasql dependency that defines the
+// canonical enum. The package was renamed from zsqltypes to gsqltypes, which
+// dropped the "z" that pointed at zetasql, so this note records that origin.
 package gsqltypes
 
 // TypeKind matches googlesql.TypeKind integer values.
@@ -11,16 +16,19 @@ type TypeKind int
 const (
 	TYPE_UNKNOWN TypeKind = 0
 
-	INT32      TypeKind = 2
-	INT64      TypeKind = 3
-	UINT32     TypeKind = 4
-	UINT64     TypeKind = 5
-	BOOL       TypeKind = 6
-	FLOAT      TypeKind = 7
-	DOUBLE     TypeKind = 8
-	STRING     TypeKind = 9
-	BYTES      TypeKind = 10
-	DATE       TypeKind = 11
+	INT32  TypeKind = 2
+	INT64  TypeKind = 3
+	UINT32 TypeKind = 4
+	UINT64 TypeKind = 5
+	BOOL   TypeKind = 6
+	FLOAT  TypeKind = 7
+	DOUBLE TypeKind = 8
+	STRING TypeKind = 9
+	BYTES  TypeKind = 10
+	DATE   TypeKind = 11
+	// ENUM and PROTO sit at 16 and 19, leaving 12-15 unfilled, because the
+	// values mirror googlesql.TypeKind verbatim. BigQuery never surfaces ENUM
+	// or PROTO, so they exist only to keep this enum aligned with the driver.
 	ENUM       TypeKind = 16
 	ARRAY      TypeKind = 17
 	STRUCT     TypeKind = 18
