@@ -12,7 +12,7 @@ The matrix is **MECE** (mutually exclusive, collectively exhaustive): every BigQ
 | 🟡 | Partially supported — see the note |
 | ❌ | Not supported yet |
 
-*Last reviewed: 2026-06-12, against the `googlesqlite` v0.3.x line.*
+*Last reviewed: 2026-06-12, against `googlesqlite` v0.3.1 (pinned commit `f7765896e410`).*
 
 ---
 
@@ -186,7 +186,7 @@ Query execution is delegated to [`googlesqlite`](https://github.com/esilver/goog
 | Scripting and multi-statement queries | ✅ | Subject to `googlesqlite` coverage. |
 | Stored procedures | ✅ | Created via `routines.insert` or DDL. |
 | Built-in functions | ✅ | Subject to the linked `googlesqlite` spec matrix. |
-| Data types (16 / 18) | ✅ | `NUMERIC` / `BIGNUMERIC` map to Arrow decimal types. |
+| Data types (16 / 18) | ✅ | `NUMERIC` / `BIGNUMERIC` map to Arrow decimal types. See the [`googlesqlite` type matrix](https://github.com/esilver/googlesqlite#status) for the two not yet supported. |
 | SQL UDFs | ✅ | |
 | JavaScript UDFs | ✅ | Inline `CREATE ... LANGUAGE js` functions; persisting a JS routine via `routines.insert` is not supported. |
 | Wildcard tables | ✅ | |

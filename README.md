@@ -1,10 +1,9 @@
 # BigQuery Emulator
 
-> A fork of [goccy/bigquery-emulator](https://github.com/goccy/bigquery-emulator) with the SQL backend swapped to the DuckDB-backed [esilver/googlesqlite](https://github.com/esilver/googlesqlite) engine, running pure-Go (`CGO_ENABLED=0`). The original BigQuery emulator is created and maintained by [@goccy](https://github.com/goccy).
+> A fork of [goccy/bigquery-emulator](https://github.com/goccy/bigquery-emulator) with the SQL backend swapped to the DuckDB-backed [esilver/googlesqlite](https://github.com/esilver/googlesqlite) engine, running pure-Go (`CGO_ENABLED=0`).
 
 [![build and test](https://github.com/esilver/bigquery-emulator/actions/workflows/test.yml/badge.svg)](https://github.com/esilver/bigquery-emulator/actions/workflows/test.yml)
 [![integration](https://github.com/esilver/bigquery-emulator/actions/workflows/integration.yml/badge.svg)](https://github.com/esilver/bigquery-emulator/actions/workflows/integration.yml)
-[![GoDoc](https://godoc.org/github.com/goccy/bigquery-emulator?status.svg)](https://pkg.go.dev/github.com/goccy/bigquery-emulator?tab=doc)
 [![Sponsor goccy](https://img.shields.io/badge/Sponsor%20goccy-%E2%9D%A4-db61a2)](https://github.com/sponsors/goccy)
 
 The only open-source emulator for Google BigQuery: a BigQuery-compatible server you run locally for testing and development, with no cloud project or credentials. Pure Go, no cgo, no C toolchain, no wasm runtime. The SQL engine is [googlesqlite](https://github.com/esilver/googlesqlite) - GoogleSQL on a pure-Go DuckDB backend, both transpiled from WebAssembly to Go ahead of time via [wasm2go](https://github.com/ncruces/wasm2go).
@@ -33,7 +32,7 @@ See [Install](#install) for `go install`, prebuilt binaries, packages, and image
 
 **Beta**, but a large part of BigQuery already works from the official client libraries. The multi-client conformance suite ([`test/e2e`](https://github.com/esilver/bigquery-emulator/tree/main/test/e2e)) runs the official Python, Ruby, PHP, Node.js, and Java clients plus the `bq` CLI over a shared query corpus, and passes for every client.
 
-**Is my workload covered?** Coverage is tracked feature by feature in a single MECE (mutually exclusive, collectively exhaustive) matrix, so check two places:
+**Is my workload covered?** Coverage is tracked feature by feature in a single matrix, so check two places:
 
 - **[BigQuery feature support matrix](./docs/feature-support.md)** for API-level features. Supported: dataset / table / job / tabledata management, GoogleSQL queries, load and extract jobs (including from Google Cloud Storage), streaming inserts, the gRPC Storage read/write APIs, external tables, and logical and materialized views. Not yet: IAM, row access policies, copy jobs, table snapshots, and BigQuery ML.
 - **[googlesqlite status](https://github.com/esilver/googlesqlite#status)** for per-function and per-type SQL coverage, which stays current as the engine evolves.
@@ -54,12 +53,6 @@ Larger scale factors stream through the load path, so corpus size scales with av
 # BQ Studio workbench
 
 [`bq-studio-emulator/`](./bq-studio-emulator/) is a local BigQuery Studio-style UI that fronts both this DuckDB-backed fork and the upstream SQLite-backed build at once: dataset explorer, SQL editor with results grid, CSV loader, and a benchmark tab, with a top-bar backend switch to run the same query against either engine and compare results and timings. Run `cd bq-studio-emulator && docker compose up` (both emulators, the UI, and a shared sample dataset), then open `http://127.0.0.1:5177`. Its [README](./bq-studio-emulator/README.md) covers the manual path and the TPC-H, ClickBench, and NYC Taxi loaders.
-
-# Sponsorship
-
-`bigquery-emulator` was created and is maintained by [@goccy](https://github.com/goccy) (Masaaki Goshima), who built the only open-source BigQuery emulator to fill a long-standing gap (Google's [emulator request](https://issuetracker.google.com/issues/129248927) has sat open for years). This repository forks that work to swap the SQL backend to DuckDB and run pure-Go. All of the upstream emulator work it builds on is goccy's.
-
-If this project saves you time, please sponsor the upstream author: <https://github.com/sponsors/goccy>.
 
 # Install
 
@@ -318,17 +311,27 @@ If you started `bigquery-emulator` with a database file, inspect it with the too
 
 A GoogleSQL query arrives over the REST API from `bq` or a client SDK. The googlesqlite driver parses and analyzes it with [go-googlesql](https://github.com/esilver/go-googlesql), then lowers and executes it against the embedded backend linked into the build.
 
-<img width="600px" src="https://user-images.githubusercontent.com/209884/196145011-e35c2df4-5f5d-43ce-b7df-08cd130b5d31.png"></img>
+```mermaid
+flowchart TD
+    client["bq CLI or BigQuery client SDK"] -->|BigQuery REST| emu["bigquery-emulator (REST API)"]
+    emu -->|database/sql| drv["googlesqlite driver"]
+    drv -->|parse and analyze| ana["go-googlesql (GoogleSQL analyzer)"]
+    drv -->|lower and execute| eng["duckdb-go-pure (pure-Go DuckDB engine)"]
+```
 
 ## Type conversion flow
 
 BigQuery types like ARRAY and STRUCT do not map 1:1 to local SQL engines. googlesqlite owns the backend-specific encoding, decoding, and native-value bridge that preserve those values through execution.
 
-<img width="600px" src="https://user-images.githubusercontent.com/209884/196145033-aa032878-7e01-4ec7-9a23-b174b87e1a24.png"></img>
-
 # Reference
 
 - [How to create a BigQuery Emulator](https://docs.google.com/presentation/d/1j5TPCpXiE9CvBjq78W8BWz-cGxU8djW1qy9Y6eBHso8/edit?usp=sharing) (Japanese) - the story behind the upstream project.
+
+# Sponsorship
+
+`bigquery-emulator` was created and is maintained by [@goccy](https://github.com/goccy) (Masaaki Goshima), who built the only open-source BigQuery emulator to fill a long-standing gap (Google's [emulator request](https://issuetracker.google.com/issues/129248927) has sat open for years). This repository forks that work to swap the SQL backend to DuckDB and run pure-Go. All of the upstream emulator work it builds on is goccy's.
+
+If this project saves you time, please sponsor the upstream author: <https://github.com/sponsors/goccy>.
 
 # License
 
