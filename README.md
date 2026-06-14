@@ -147,7 +147,7 @@ $ ./bigquery-emulator --project=test --data-from-yaml=./server/testdata/data.yam
 [bigquery-emulator] gRPC server listening at 0.0.0.0:9060
 ```
 
-* `server/testdata/data.yaml` is [here](https://github.com/goccy/bigquery-emulator/blob/main/server/testdata/data.yaml)
+* `server/testdata/data.yaml` is [here](https://github.com/esilver/bigquery-emulator/blob/main/server/testdata/data.yaml)
 
 ### 2. Call endpoint from bq client
 

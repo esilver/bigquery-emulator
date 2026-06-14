@@ -60,7 +60,7 @@ jobs:
       # SLSA build-provenance attestation, signed by the GitHub Actions
       # OIDC issuer and pushed to GHCR alongside the image manifest.
       # Consumers verify with
-      #   gh attestation verify oci://ghcr.io/goccy/bigquery-emulator@<digest>
+      #   gh attestation verify oci://ghcr.io/esilver/bigquery-emulator@<digest>
       # The tags share one digest, so a single attestation covers them all.
       # The attestations API rejects writes from user-owned private repos;
       # gate on visibility so a private fork's run does not fail here.
