@@ -21,6 +21,10 @@ $ docker run -it -p 9050:9050 -p 9060:9060 ghcr.io/esilver/bigquery-emulator:lat
 $ bq --api http://0.0.0.0:9050 query --project_id=test "SELECT id, name FROM dataset1.table_a ORDER BY id"
 ```
 
+The `bq` step needs the [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) on your `PATH`. To stay CLI-free, point any BigQuery client library at `http://0.0.0.0:9050` instead (see the [Python](#how-to-use-from-python-client) and [Go](#synopsis) examples below).
+
+On an Apple Silicon Mac the `docker run` may warn about the image platform. Add `--platform linux/x86_64` to the `docker run` line if so.
+
 The image above is published to GitHub Container Registry by CI. Tagged releases (`v*` pushes) are built by `build.yml` as a single multi-arch manifest (`linux/amd64`, `linux/arm64`). To build from source instead: `git clone https://github.com/esilver/bigquery-emulator && cd bigquery-emulator && go run ./cmd/bigquery-emulator --project=test`. The original upstream image (SQLite-backed) is `ghcr.io/goccy/bigquery-emulator:latest`.
 
 See [Install](#install) for `go install`, prebuilt binaries and packages, and [How to start the standalone server](#how-to-start-the-standalone-server) for the full set of options and client examples.
@@ -41,6 +45,8 @@ BigQuery is a large product, so the emulator's coverage is tracked feature by fe
 ### 📋 [BigQuery feature support matrix](./docs/feature-support.md)
 
 At a glance, the emulator supports dataset / table / job / tabledata management, GoogleSQL query execution, batch load and extract jobs (including loads from Google Cloud Storage), streaming inserts, the gRPC BigQuery Storage read/write APIs, external tables, and logical and materialized views. IAM policy management, row access policies, copy jobs, table snapshots and BigQuery ML are not implemented yet. See the matrix for the complete, categorized breakdown.
+
+**Is my workload covered?** Check two places: the [feature support matrix](./docs/feature-support.md) for API-level features (the unsupported set is IAM, row access policies, copy jobs, table snapshots, and BigQuery ML), and the [googlesqlite status](https://github.com/esilver/googlesqlite#status) for per-function and per-type SQL coverage.
 
 ## GoogleSQL
 
@@ -84,9 +90,18 @@ $ go install github.com/goccy/bigquery-emulator/cmd/bigquery-emulator@latest
 ```
 
 Note: this `go install` of the upstream `github.com/goccy/...` path yields the
-SQLite-backed upstream build. To get this DuckDB-backed fork, build from a
-checkout (`go build ./cmd/...`), since the DuckDB backend is wired up through
-this repo's `replace` directives that a module-path install cannot reach.
+SQLite-backed upstream build, not this fork. The DuckDB backend is wired up
+through `replace` directives that a module-path install cannot reach, so to get
+it either build from a checkout (`git clone https://github.com/esilver/bigquery-emulator && cd bigquery-emulator && go build ./cmd/...`)
+or, to import this fork from your own module, keep the `github.com/goccy/...`
+import paths and add the same two redirects this repo's `go.mod` uses:
+
+```
+replace github.com/goccy/googlesqlite => github.com/esilver/googlesqlite v0.0.0-20260613063153-f7765896e410
+replace github.com/goccy/go-googlesql => github.com/esilver/go-googlesql v0.2.4-finalizer.1.0.20260611225755-3bdff21371a3
+```
+
+(These are the pins this repo's `go.mod` uses today. Match them to the `go.mod` in the checkout you build against, since they advance over time.)
 
 You can also download the docker image with the following command
 
@@ -230,6 +245,8 @@ If you use the Go language as a BigQuery client, you can launch the BigQuery emu
 Please imports `github.com/goccy/bigquery-emulator/server` ( and `github.com/goccy/bigquery-emulator/types` ) and you can use `server.New` API to create the emulator server instance.
 
 See the API reference for more information: https://pkg.go.dev/github.com/goccy/bigquery-emulator
+
+The `github.com/goccy/...` import paths below are correct, but a test module that wants the DuckDB-backed engine still needs the two `replace` directives from [Install](#install) in its own `go.mod`. Without them the imports resolve to the SQLite-backed upstream.
 
 ```go
 package main
