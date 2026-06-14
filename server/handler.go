@@ -702,6 +702,48 @@ func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentReque
 	sourceFormat := load.SourceFormat
 	columns := []*types.Column{}
 	data := types.Data{}
+
+	conn, err := r.server.connMgr.Connection(ctx, tableRef.ProjectId, tableRef.DatasetId)
+	if err != nil {
+		return fmt.Errorf("failed to get connection: %w", err)
+	}
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.RollbackIfNotCommitted()
+	if tableExisted {
+		switch load.WriteDisposition {
+		case "WRITE_TRUNCATE":
+			if err := r.server.contentRepo.TruncateTable(ctx, tx, tableRef.ProjectId, tableRef.DatasetId, tableRef.TableId); err != nil {
+				return err
+			}
+		case "WRITE_EMPTY":
+			count, err := r.server.contentRepo.CountTableRows(ctx, tx, tableRef.ProjectId, tableRef.DatasetId, tableRef.TableId)
+			if err != nil {
+				return err
+			}
+			if count > 0 {
+				return fmt.Errorf("table %s already exists and contains data (WRITE_EMPTY)", tableRef.TableId)
+			}
+		}
+	}
+	// flushBatch streams accumulated rows into the destination so a large load
+	// binds in bounded memory instead of holding every row at once. The PARQUET
+	// path flushes mid-read once it reaches loadBatchSize; the row-at-a-time
+	// formats flush their remainder after the switch. All flushes share the one
+	// transaction, so the load stays atomic.
+	const loadBatchSize = 50000
+	flushBatch := func(rows types.Data) error {
+		if len(rows) == 0 {
+			return nil
+		}
+		return r.server.contentRepo.AddTableData(ctx, tx, tableRef.ProjectId, tableRef.DatasetId, &types.Table{
+			ID:      tableRef.TableId,
+			Columns: columns,
+			Data:    rows,
+		})
+	}
 	switch sourceFormat {
 	case "CSV":
 		records := csvRecords
@@ -758,6 +800,12 @@ func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentReque
 			row := rowData.(map[string]interface{})
 			convertParquetTemporal(row, columns, units)
 			data = append(data, row)
+			if len(data) >= loadBatchSize {
+				if err := flushBatch(data); err != nil {
+					return err
+				}
+				data = data[:0]
+			}
 		}
 	case "NEWLINE_DELIMITED_JSON":
 		for _, f := range tableContent.Schema.Fields {
@@ -783,37 +831,9 @@ func (h *uploadContentHandler) Handle(ctx context.Context, r *uploadContentReque
 	default:
 		return fmt.Errorf("not support sourceFormat: %s", sourceFormat)
 	}
-	tableDef := &types.Table{
-		ID:      tableRef.TableId,
-		Columns: columns,
-		Data:    data,
-	}
-	conn, err := r.server.connMgr.Connection(ctx, tableRef.ProjectId, tableRef.DatasetId)
-	if err != nil {
-		return fmt.Errorf("failed to get connection: %w", err)
-	}
-	tx, err := conn.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.RollbackIfNotCommitted()
-	if tableExisted {
-		switch load.WriteDisposition {
-		case "WRITE_TRUNCATE":
-			if err := r.server.contentRepo.TruncateTable(ctx, tx, tableRef.ProjectId, tableRef.DatasetId, tableRef.TableId); err != nil {
-				return err
-			}
-		case "WRITE_EMPTY":
-			count, err := r.server.contentRepo.CountTableRows(ctx, tx, tableRef.ProjectId, tableRef.DatasetId, tableRef.TableId)
-			if err != nil {
-				return err
-			}
-			if count > 0 {
-				return fmt.Errorf("table %s already exists and contains data (WRITE_EMPTY)", tableRef.TableId)
-			}
-		}
-	}
-	if err := r.server.contentRepo.AddTableData(ctx, tx, tableRef.ProjectId, tableRef.DatasetId, tableDef); err != nil {
+	// Flush the tail. The row-at-a-time formats accumulated into data; the
+	// PARQUET path already streamed full batches and leaves only a remainder.
+	if err := flushBatch(data); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
