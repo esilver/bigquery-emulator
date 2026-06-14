@@ -452,6 +452,26 @@ h2 {
   min-height: 0;
 }
 
+/* Pin each child to its track so the results panel always fills the 1fr row.
+   #queryError is display:none until a query fails, which drops it as a grid
+   item, so without explicit placement auto-flow shifts the panel up into the
+   auto row and strands the 1fr track as empty white space below the table. */
+#queryTab > .editor-toolbar {
+  grid-row: 1;
+}
+
+#queryTab > #sqlEditor {
+  grid-row: 2;
+}
+
+#queryTab > #queryError {
+  grid-row: 3;
+}
+
+#queryTab > .results-panel {
+  grid-row: 4;
+}
+
 .editor-toolbar,
 .panel-title {
   justify-content: space-between;
