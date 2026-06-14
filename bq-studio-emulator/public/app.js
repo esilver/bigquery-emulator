@@ -24,8 +24,18 @@ const state = {
   lastResult: null,
   activeResultView: "results",
   compareMode: store.getItem("bqStudioCompareMode") === "true",
+  maxRows: parseMaxRows(store.getItem("bqStudioMaxRows"), 1000),
   history: JSON.parse(store.getItem("bqStudioHistory") || "[]")
 };
+
+// parseMaxRows keeps the stored selection inside the values the selector offers
+// so a stale or hand-edited localStorage entry cannot send an arbitrary page
+// size. The server clamps again, this is the client-side guard.
+function parseMaxRows(value, fallback) {
+  const allowed = new Set([100, 1000, 10000, 50000]);
+  const parsed = Number(value);
+  return allowed.has(parsed) ? parsed : fallback;
+}
 
 // executionDetailRows derives the Execution-details list from a query result.
 // It is a pure transform so the same data can power the metadata panel and be
@@ -55,6 +65,7 @@ const refs = hasDocument ? {
   sqlEditor: el("sqlEditor"),
   queryError: el("queryError"),
   resultSubtabs: el("resultSubtabs"),
+  resultsLoadingBar: el("resultsLoadingBar"),
   resultsGrid: el("resultsGrid"),
   resultJson: el("resultJson"),
   resultExecution: el("resultExecution"),
@@ -62,6 +73,7 @@ const refs = hasDocument ? {
   compareDiff: el("compareDiff"),
   compareGrids: el("compareGrids"),
   compareModeToggle: el("compareModeToggle"),
+  maxRowsSelect: el("maxRowsSelect"),
   copyJsonBtn: el("copyJsonBtn"),
   downloadCsvBtn: el("downloadCsvBtn"),
   tableDetails: el("tableDetails"),
@@ -173,6 +185,14 @@ function clearError() {
   refs.queryError.textContent = "";
 }
 
+// The shimmer bar lives in the results panel and is toggled by the async
+// result flows (query, compare, preview). It is purely visual, so a missing
+// ref under a Node require is a no-op.
+function setResultsLoading(active) {
+  if (!refs.resultsLoadingBar) return;
+  refs.resultsLoadingBar.classList.toggle("hidden", !active);
+}
+
 function setResultsPlaceholder(summary, message, stateClass = "") {
   refs.resultSummary.textContent = summary;
   refs.queryMeta.textContent = "";
@@ -227,7 +247,10 @@ function setBusy(button, busyText) {
 function startQueryProgress(startedAt) {
   const update = () => {
     const elapsed = formatDuration(Date.now() - startedAt);
-    const prefix = state.activeQuery?.cancelRequested ? "Cancel requested" : "Running";
+    const detaching = state.activeQuery?.cancelMode === "detach";
+    const prefix = state.activeQuery?.cancelRequested
+      ? (detaching ? "Detach requested" : "Cancel requested")
+      : "Running";
     refs.queryMeta.textContent = `${prefix} · ${elapsed}`;
     refs.resultSummary.textContent = `${prefix} · ${elapsed}`;
   };
@@ -252,11 +275,15 @@ function showCancelButton() {
 function cancelActiveQuery() {
   if (!state.activeQuery || state.activeQuery.cancelRequested) return;
   state.activeQuery.cancelRequested = true;
+  // A detach target keeps running the statement in the emulator, so the verb
+  // matches the cancelMode the active query was started with.
+  const detaching = state.activeQuery.cancelMode === "detach";
   refs.cancelQueryBtn.disabled = true;
-  refs.cancelQueryBtn.textContent = "Canceling";
+  refs.cancelQueryBtn.textContent = detaching ? "Detaching" : "Canceling";
   const elapsed = formatDuration(Date.now() - state.activeQuery.startedAt);
-  refs.queryMeta.textContent = `Cancel requested · ${elapsed}`;
-  refs.resultSummary.textContent = `Cancel requested · ${elapsed}`;
+  const prefix = detaching ? "Detach requested" : "Cancel requested";
+  refs.queryMeta.textContent = `${prefix} · ${elapsed}`;
+  refs.resultSummary.textContent = `${prefix} · ${elapsed}`;
   state.activeQuery.controller.abort();
 }
 
@@ -422,6 +449,12 @@ LIMIT 100`;
     renderTableDetails(schema);
   } catch (error) {
     if (isStaleLoad(generation)) return false;
+    // The previous table's metadata must not linger after a failed schema
+    // fetch, so the Details pane drops back to its empty state.
+    state.selectedSchema = null;
+    refs.tableStats.textContent = "";
+    refs.tableDetails.className = "details-content empty-state";
+    refs.tableDetails.textContent = "Schema unavailable for this table.";
     showError(error.message, error.details);
   }
   return true;
@@ -463,12 +496,13 @@ async function runQuery(query = refs.sqlEditor.value, source = "manual") {
   setResultExportEnabled(false);
   refs.resultsGrid.setAttribute("aria-busy", "true");
   setResultsPlaceholder("Running query...", "Running query...", "loading-state");
+  setResultsLoading(true);
   const progressTimer = startQueryProgress(startedAt);
   try {
     const result = await api("/api/query", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query, maxResults: state.maxRows }),
       signal: controller.signal
     });
     if (isStaleView(viewToken)) return;
@@ -510,6 +544,7 @@ async function runQuery(query = refs.sqlEditor.value, source = "manual") {
     window.clearInterval(progressTimer);
     if (state.activeQuery === activeQuery) state.activeQuery = null;
     refs.resultsGrid.setAttribute("aria-busy", "false");
+    setResultsLoading(false);
     hideCancel();
     restore();
   }
@@ -530,11 +565,12 @@ async function runCompare(query = refs.sqlEditor.value, source = "manual") {
   refs.resultSummary.textContent = "Comparing across backends...";
   refs.compareDiff.innerHTML = `<span class="compare-chip">Running both backends...</span>`;
   refs.compareGrids.innerHTML = "";
+  setResultsLoading(true);
   try {
     const response = await fetch("/api/query/compare", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query, maxResults: state.maxRows }),
       signal: controller.signal
     });
     const text = await response.text();
@@ -577,6 +613,7 @@ async function runCompare(query = refs.sqlEditor.value, source = "manual") {
     });
   } finally {
     if (state.activeQuery === activeQuery) state.activeQuery = null;
+    setResultsLoading(false);
     restore();
   }
 }
@@ -610,6 +647,17 @@ function renderCompare(results) {
     const failing = results.filter(entry => !entry.ok).map(entry => entry.targetLabel).join(", ");
     chips.push(`<span class="compare-chip differ">Divergence: ${escapeHtml(failing)} errored, others ran</span>`);
   }
+
+  // The diff mask only exists when the panes line up row-by-row, so a count of
+  // differing cells adds a chip that matches the highlighted cells below.
+  const diffByTarget = computeCompareCellDiffs(results);
+  if (diffByTarget) {
+    const referenceMask = diffByTarget.values().next().value || [];
+    const differingCells = referenceMask.reduce((total, rowMask) => total + rowMask.filter(Boolean).length, 0);
+    chips.push(differingCells
+      ? `<span class="compare-chip differ">Cell values differ: ${formatNumber(differingCells)}</span>`
+      : `<span class="compare-chip match">Cell values match</span>`);
+  }
   refs.compareDiff.innerHTML = chips.join("") || `<span class="compare-chip differ">No successful backend</span>`;
 
   refs.compareGrids.innerHTML = "";
@@ -630,7 +678,7 @@ function renderCompare(results) {
       body.textContent = "Query completed with no tabular result.";
     } else {
       body.className = "grid-shell";
-      body.innerHTML = buildGridHtml(entry.fields, entry.rows || []);
+      body.innerHTML = buildGridHtml(entry.fields, entry.rows || [], diffByTarget?.get(entry.targetId));
       bindCellCopy(body);
     }
     pane.appendChild(body);
@@ -644,22 +692,55 @@ function resultSummaryText(result) {
   return `${formatNumber(rows.length)} shown · ${formatNumber(result.totalRows)} total${capNote} · ${result.durationMs} ms · ${result.jobId || ""}`;
 }
 
-function buildGridHtml(fields, rows) {
+function buildGridHtml(fields, rows, diffMask = null) {
   return `
     <table class="data-grid">
       <thead><tr>${fields.map(field => `<th>${escapeHtml(field.name)}<span class="count-pill">${escapeHtml(field.type || "")}</span></th>`).join("")}</tr></thead>
       <tbody>
-        ${rows.map(row => `<tr>${fields.map(field => {
+        ${rows.map((row, rowIndex) => `<tr>${fields.map((field, colIndex) => {
           const rawValue = row[field.name];
           const value = formatCellValue(rawValue);
+          const differs = Boolean(diffMask?.[rowIndex]?.[colIndex]);
           if (isNestedCellValue(rawValue)) {
-            return `<td class="nested-cell" title="${escapeHtml(value)}"><pre class="cell-scroll">${escapeHtml(value)}</pre></td>`;
+            return `<td class="nested-cell${differs ? " cell-diff" : ""}" title="${escapeHtml(value)}"><pre class="cell-scroll">${escapeHtml(value)}</pre></td>`;
           }
-          return `<td title="${escapeHtml(value)}">${escapeHtml(value)}</td>`;
+          return `<td${differs ? ` class="cell-diff"` : ""} title="${escapeHtml(value)}">${escapeHtml(value)}</td>`;
         }).join("")}</tr>`).join("")}
       </tbody>
     </table>
   `;
+}
+
+// computeCompareCellDiffs marks the cells whose value diverges across the
+// compare panes. It returns one boolean grid per target id, or null when the
+// panes are not aligned enough for a row-by-row read (fewer than two successful
+// backends, mismatched column lists, or different row counts). The diff is a
+// pure transform so the highlighter can be unit-tested without a DOM, and a
+// null result leaves the existing plain Compare rendering untouched.
+function computeCompareCellDiffs(results) {
+  const okResults = (results || []).filter(entry => entry.ok);
+  if (okResults.length < 2) return null;
+
+  const columnKeys = okResults.map(entry => (entry.fields || []).map(field => field.name).join("|"));
+  if (!columnKeys.every(key => key === columnKeys[0])) return null;
+
+  const rowCounts = okResults.map(entry => (entry.rows || []).length);
+  if (!rowCounts.every(count => count === rowCounts[0])) return null;
+
+  const fieldNames = (okResults[0].fields || []).map(field => field.name);
+  const rowCount = rowCounts[0];
+  const diffByTarget = new Map(okResults.map(entry => [entry.targetId, []]));
+
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+    const rowMask = new Map(okResults.map(entry => [entry.targetId, []]));
+    for (const name of fieldNames) {
+      const cellKeys = okResults.map(entry => formatCellValue((entry.rows[rowIndex] || {})[name]));
+      const differs = !cellKeys.every(key => key === cellKeys[0]);
+      for (const entry of okResults) rowMask.get(entry.targetId).push(differs);
+    }
+    for (const entry of okResults) diffByTarget.get(entry.targetId).push(rowMask.get(entry.targetId));
+  }
+  return diffByTarget;
 }
 
 function renderResults(result) {
@@ -815,6 +896,7 @@ async function previewSelectedTable() {
   showSingleResultsRegion();
   setResultExportEnabled(false);
   setResultsPlaceholder("Loading preview...", "Loading preview...", "loading-state");
+  setResultsLoading(true);
   try {
     const result = await api(`/api/tables/${encodeURIComponent(dataset)}/${encodeURIComponent(table)}/preview?limit=100`);
     if (isStaleView(viewToken)) return;
@@ -831,6 +913,8 @@ async function previewSelectedTable() {
     if (isStaleView(viewToken)) return;
     setResultsPlaceholder(`Preview failed · ${Date.now() - startedAt} ms`, "Preview failed. See error details above.", "error-state");
     showError(error.message, error.details);
+  } finally {
+    setResultsLoading(false);
   }
 }
 
@@ -1158,6 +1242,27 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+// debounce coalesces a burst of calls into a single trailing call. The dataset
+// search uses it so re-rendering the explorer waits until typing settles
+// instead of running on every keystroke. The returned function exposes cancel
+// so a teardown can drop a pending timer, and the helper is environment-neutral
+// (it reads a timer source) so it stays unit-testable without the DOM.
+function debounce(fn, wait = 180, timers = (typeof window !== "undefined" ? window : globalThis)) {
+  let timer = null;
+  const debounced = (...args) => {
+    if (timer !== null) timers.clearTimeout(timer);
+    timer = timers.setTimeout(() => {
+      timer = null;
+      fn(...args);
+    }, wait);
+  };
+  debounced.cancel = () => {
+    if (timer !== null) timers.clearTimeout(timer);
+    timer = null;
+  };
+  return debounced;
+}
+
 function dispatchRun() {
   if (state.compareMode) {
     runCompare();
@@ -1171,6 +1276,12 @@ function setCompareMode(enabled) {
   localStorage.setItem("bqStudioCompareMode", String(enabled));
   refs.compareModeToggle.checked = enabled;
   el("runBtn").title = enabled ? "Run on every backend side by side (Cmd/Ctrl+Enter)" : "Run query (Cmd/Ctrl+Enter)";
+}
+
+function setMaxRows(value) {
+  state.maxRows = parseMaxRows(value, state.maxRows);
+  localStorage.setItem("bqStudioMaxRows", String(state.maxRows));
+  refs.maxRowsSelect.value = String(state.maxRows);
 }
 
 function bindEvents() {
@@ -1187,6 +1298,7 @@ function bindEvents() {
   el("runBtn").addEventListener("click", dispatchRun);
   el("compareBtn").addEventListener("click", () => runCompare());
   refs.compareModeToggle.addEventListener("change", () => setCompareMode(refs.compareModeToggle.checked));
+  refs.maxRowsSelect.addEventListener("change", () => setMaxRows(refs.maxRowsSelect.value));
   refs.cancelQueryBtn.addEventListener("click", cancelActiveQuery);
   refs.sqlEditor.addEventListener("keydown", event => {
     if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key === "Enter") {
@@ -1200,6 +1312,16 @@ function bindEvents() {
       toggleSqlLineComment(refs.sqlEditor);
     }
   });
+  // Cmd/Ctrl+. cancels the running query from anywhere, so it works even when
+  // focus left the editor. preventDefault only fires when there is something to
+  // cancel so the chord stays inert otherwise. cancelActiveQuery aborts the
+  // request and the per-target cancelMode decides cancel-vs-detach downstream.
+  document.addEventListener("keydown", event => {
+    if ((event.metaKey || event.ctrlKey) && event.key === "." && state.activeQuery && !state.activeQuery.cancelRequested) {
+      event.preventDefault();
+      cancelActiveQuery();
+    }
+  });
   refs.resultSubtabs.querySelectorAll(".result-subtab").forEach(tab => {
     tab.addEventListener("click", () => setResultView(tab.dataset.resultView));
   });
@@ -1208,7 +1330,14 @@ function bindEvents() {
   el("sampleAggregateBtn").addEventListener("click", setAggregateQuery);
   refs.copyJsonBtn.addEventListener("click", copyResultJson);
   refs.downloadCsvBtn.addEventListener("click", downloadResultCsv);
-  refs.datasetSearch.addEventListener("input", renderDatasets);
+  const debouncedRenderDatasets = debounce(renderDatasets);
+  refs.datasetSearch.addEventListener("input", debouncedRenderDatasets);
+  // A clear via the search "x" or Escape should redraw immediately, so cancel
+  // the pending debounce and render the full list without the typing delay.
+  refs.datasetSearch.addEventListener("search", () => {
+    debouncedRenderDatasets.cancel();
+    renderDatasets();
+  });
   el("inferSchemaBtn").addEventListener("click", inferCsvSchema);
   refs.csvFile.addEventListener("change", inferCsvSchema);
   refs.csvSkipRows.addEventListener("change", inferCsvSchema);
@@ -1220,6 +1349,7 @@ function bindEvents() {
     renderHistory();
   });
   setCompareMode(state.compareMode);
+  setMaxRows(state.maxRows);
 }
 
 async function init() {
@@ -1261,5 +1391,5 @@ if (hasDocument) {
 // Node tests require this file for the pure helpers above. Browsers ignore the
 // guarded export because module is undefined there.
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { executionDetailRows };
+  module.exports = { executionDetailRows, computeCompareCellDiffs, debounce };
 }

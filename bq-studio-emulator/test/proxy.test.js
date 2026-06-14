@@ -128,6 +128,53 @@ test("/api/query rejects an empty body with 400", async () => {
   assert.equal(body.error, "Query is required");
 });
 
+test("/api/query forwards a clamped maxResults to the emulator and echoes the row limit", async () => {
+  upstreamHandler = () => ({
+    status: 200,
+    body: {
+      jobReference: { jobId: "job_rows" },
+      totalRows: "1",
+      schema: { fields: [{ name: "n", type: "INTEGER" }] },
+      rows: [{ f: [{ v: "1" }] }]
+    }
+  });
+
+  // A request above the hard cap is held at the cap both in the forwarded page
+  // size and in the rowLimit the proxy reports back to the UI.
+  const { status, body } = await call("/api/query", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ query: "SELECT 1 AS n", maxResults: 999999 })
+  });
+  assert.equal(status, 200);
+  assert.equal(body.rowLimit, 50000);
+
+  const queryRequest = upstreamRequests.find(entry => /\/queries$/.test(entry.url));
+  assert.ok(queryRequest, "expected a forwarded query request");
+  assert.equal(JSON.parse(queryRequest.body).maxResults, 50000);
+});
+
+test("/api/query falls back to the default page size when maxResults is blank", async () => {
+  upstreamHandler = () => ({
+    status: 200,
+    body: {
+      jobReference: { jobId: "job_default" },
+      totalRows: "1",
+      schema: { fields: [{ name: "n", type: "INTEGER" }] },
+      rows: [{ f: [{ v: "1" }] }]
+    }
+  });
+  const { status, body } = await call("/api/query", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ query: "SELECT 1 AS n" })
+  });
+  assert.equal(status, 200);
+  assert.equal(body.rowLimit, 1000);
+  const queryRequest = upstreamRequests.find(entry => /\/queries$/.test(entry.url));
+  assert.equal(JSON.parse(queryRequest.body).maxResults, 1000);
+});
+
 test("/api/query/compare runs every backend and reports per-pane divergence", async () => {
   upstreamHandler = (req, body) => {
     const parsed = JSON.parse(body);

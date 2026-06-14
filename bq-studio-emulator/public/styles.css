@@ -156,6 +156,23 @@ button:disabled {
   margin: 0;
 }
 
+.max-rows {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.max-rows select {
+  height: 28px;
+  width: auto;
+  padding: 0 6px;
+}
+
 .search-field {
   position: relative;
   display: flex;
@@ -544,10 +561,51 @@ h2 {
 }
 
 .results-panel {
+  position: relative;
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);
   min-height: 0;
   background: var(--surface);
+}
+
+/* A thin indeterminate progress bar pinned to the top of the results panel.
+   It is absolutely positioned so showing it never reflows the grid rows below.
+   The gradient sweep animates while a query, compare, or preview runs. */
+.loading-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  z-index: 3;
+  overflow: hidden;
+  background: rgba(26, 115, 232, 0.16);
+}
+
+.loading-bar::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 40%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, rgba(26, 115, 232, 0) 0%, var(--accent) 50%, rgba(26, 115, 232, 0) 100%);
+  animation: loading-bar-sweep 1.15s ease-in-out infinite;
+}
+
+@keyframes loading-bar-sweep {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-bar::before {
+    animation-duration: 2.4s;
+  }
 }
 
 .result-subtabs {
@@ -712,6 +770,19 @@ table.data-grid {
 
 .data-grid tbody tr:hover {
   background: #f8f9fa;
+}
+
+/* Compare panes highlight cells whose value diverges between backends. The
+   amber wash matches the "differ" chips and the left rule draws the eye down
+   the column without overpowering the row-hover state. */
+.data-grid td.cell-diff,
+.data-grid td.cell-diff.nested-cell {
+  background: #fef7e0;
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.data-grid tbody tr:hover td.cell-diff {
+  background: #fdf0c9;
 }
 
 .data-grid td.nested-cell {
