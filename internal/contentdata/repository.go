@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -590,26 +591,69 @@ func (r *Repository) AddTableData(ctx context.Context, tx *connection.Tx, projec
 		columns = append(columns, col)
 	}
 
-	placeholders := make([]string, 0, len(columns))
-	columnsWithEscape := make([]string, 0, len(columns))
+	colNames := make([]string, 0, len(columns))
 	for _, col := range columns {
 		if err := validateIdent("column", col.Name); err != nil {
 			return err
 		}
-		if col.Type == types.JSON {
-			// A JSON column cannot take a raw bound string: DuckDB would store
-			// it as a JSON string literal (double-encoded). PARSE_JSON turns
-			// the bound JSON text into a proper JSON value.
-			placeholders = append(placeholders, "PARSE_JSON(?)")
-		} else {
-			placeholders = append(placeholders, "?")
-		}
-		columnsWithEscape = append(columnsWithEscape, fmt.Sprintf("`%s`", escapeIdent(col.Name)))
+		colNames = append(colNames, col.Name)
 	}
 
 	tablePath, err := r.tablePath(projectID, datasetID, table.ID)
 	if err != nil {
 		return err
+	}
+
+	// Build the per-column bound values for every row once. The same slices
+	// feed both the bulk Appender and the per-row fallback, so the stored cells
+	// are identical whichever path runs: googlesqlite.BulkInsert applies the
+	// same engine casts the per-row INSERT applies (PARSE_JSON for JSON, a
+	// zone-free parse for the civil DATE/DATETIME/TIME strings produced below).
+	rows := make([][]any, len(table.Data))
+	for i, data := range table.Data {
+		values := make([]any, 0, len(columns))
+		for _, column := range columns {
+			value, err := bindColumnValue(column, data)
+			if err != nil {
+				return err
+			}
+			values = append(values, value)
+		}
+		rows[i] = values
+	}
+
+	// Route the batch through the DuckDB Appender (one engine statement for the
+	// whole batch) rather than re-entering the analyzer once per row. The load
+	// joins the transaction already open on this connection. Unsupported column
+	// shapes (GEOGRAPHY/INTERVAL/PROTO/ENUM, ...) return ErrBulkInsertUnsupported
+	// and drop to the per-row INSERT path below.
+	bulkErr := tx.Conn().Conn.Raw(func(dc interface{}) error {
+		gsqlConn, ok := dc.(*googlesqlite.Conn)
+		if !ok {
+			return fmt.Errorf("failed to get *googlesqlite.Conn from %T", dc)
+		}
+		_, err := gsqlConn.BulkInsert(ctx, []string{projectID, datasetID, table.ID}, colNames, rows)
+		return err
+	})
+	if bulkErr == nil {
+		return nil
+	}
+	if !errors.Is(bulkErr, googlesqlite.ErrBulkInsertUnsupported) {
+		return bulkErr
+	}
+
+	// Fallback: one prepared INSERT executed per row. A JSON column needs
+	// PARSE_JSON so the bound JSON text is stored as a JSON value rather than a
+	// double-encoded string literal.
+	placeholders := make([]string, 0, len(columns))
+	columnsWithEscape := make([]string, 0, len(columns))
+	for _, col := range columns {
+		if col.Type == types.JSON {
+			placeholders = append(placeholders, "PARSE_JSON(?)")
+		} else {
+			placeholders = append(placeholders, "?")
+		}
+		columnsWithEscape = append(columnsWithEscape, fmt.Sprintf("`%s`", escapeIdent(col.Name)))
 	}
 	query := fmt.Sprintf(
 		"INSERT `%s` (%s) VALUES (%s)",
@@ -623,67 +667,63 @@ func (r *Repository) AddTableData(ctx context.Context, tx *connection.Tx, projec
 		return err
 	}
 
-	for _, data := range table.Data {
-		values := make([]interface{}, 0, len(table.Columns))
-
-		for _, column := range columns {
-			value, found := data[column.Name]
-			if !found || value == nil {
-				values = append(values, nil)
-				continue
-			}
-
-			if column.Type == types.JSON {
-				// The PARSE_JSON(?) placeholder expects JSON text. A string
-				// value is already JSON text (clients json-encode it); any
-				// other Go value is marshaled to its JSON representation.
-				jsonText, err := jsonColumnText(value)
-				if err != nil {
-					return fmt.Errorf("failed to encode JSON value for column %s: %w", column.Name, err)
-				}
-				values = append(values, jsonText)
-				continue
-			}
-
-			inputString, isInputString := value.(string)
-			if isInputString && column.Type == types.TIMESTAMP {
-				parsedTimestamp, err := googlesqlite.TimeFromTimestampValue(inputString)
-				// If we could parse the timestamp, use it when inserting, otherwise fallback to the supplied value
-				if err == nil {
-					values = append(values, parsedTimestamp)
-					continue
-				}
-			}
-
-			// A time.Time binds directly into a TIMESTAMP column, but DATE,
-			// DATETIME and TIME are civil (zoneless): the value layer encodes a
-			// time.Time as a zoned TIMESTAMP, so binding it into one of those
-			// columns applies a local-zone shift (e.g. a midnight-UTC DATE rolls
-			// back a day west of UTC). Render those as a civil-form string so the
-			// cast is purely textual.
-			if t, isTime := value.(time.Time); isTime {
-				switch column.Type {
-				case types.DATE:
-					values = append(values, formatCivilDate(t))
-					continue
-				case types.DATETIME:
-					values = append(values, formatCivilDateTime(t))
-					continue
-				case types.TIME:
-					values = append(values, formatCivilTime(t))
-					continue
-				}
-			}
-
-			values = append(values, value)
-		}
-
+	for _, values := range rows {
 		if _, err := stmt.ExecContext(ctx, values...); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// bindColumnValue converts one row's value for a column into the Go value bound
+// to it, applying the type-specific coercions the engine needs. The result is
+// stored identically by googlesqlite.BulkInsert and by the per-row INSERT path.
+func bindColumnValue(column *types.Column, data map[string]interface{}) (any, error) {
+	value, found := data[column.Name]
+	if !found || value == nil {
+		return nil, nil
+	}
+
+	if column.Type == types.JSON {
+		// A string value is already JSON text (clients json-encode it); any
+		// other Go value is marshaled to its JSON representation. The engine
+		// then parses this text into a JSON value (PARSE_JSON in the fallback,
+		// the equivalent cast inside BulkInsert), so a raw bound string is not
+		// stored as a double-encoded JSON string literal.
+		jsonText, err := jsonColumnText(value)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode JSON value for column %s: %w", column.Name, err)
+		}
+		return jsonText, nil
+	}
+
+	if inputString, isInputString := value.(string); isInputString && column.Type == types.TIMESTAMP {
+		parsedTimestamp, err := googlesqlite.TimeFromTimestampValue(inputString)
+		// Use the parsed instant when the string parses, otherwise fall back to
+		// the supplied value.
+		if err == nil {
+			return parsedTimestamp, nil
+		}
+	}
+
+	// A time.Time binds directly into a TIMESTAMP column, but DATE, DATETIME and
+	// TIME are civil (zoneless): the value layer encodes a time.Time as a zoned
+	// TIMESTAMP, so binding it into one of those columns applies a local-zone
+	// shift (e.g. a midnight-UTC DATE rolls back a day west of UTC). Render those
+	// as a civil-form string so the cast is purely textual.
+	if t, isTime := value.(time.Time); isTime {
+		switch column.Type {
+		case types.DATE:
+			return formatCivilDate(t), nil
+		case types.DATETIME:
+			return formatCivilDateTime(t), nil
+		case types.TIME:
+			return formatCivilTime(t), nil
+		}
+	}
+
+	return value, nil
 }
 
 // formatCivilDate renders a time as the BigQuery DATE civil form "YYYY-MM-DD"
