@@ -27,8 +27,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ruby ruby-dev build-essential ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY clients/ruby/gems.txt /tmp/gems.txt
-RUN gem install --no-document --install-dir /deps/ruby \
-        $(awk -F: '{print $1, "-v", $2}' /tmp/gems.txt)
+# gems.txt lists name:version pins. Installing with GEM_HOME (rather than
+# --install-dir) makes RubyGems resolve them as one set, so a transitive pin
+# such as json constrains every gem that depends on it.
+RUN GEM_HOME=/deps/ruby GEM_PATH=/deps/ruby \
+        gem install --no-document $(cat /tmp/gems.txt)
 
 # ---------------------------------------------------------------------------
 # PHP client dependencies
