@@ -6,7 +6,7 @@
 [![integration](https://github.com/esilver/bigquery-emulator/actions/workflows/integration.yml/badge.svg)](https://github.com/esilver/bigquery-emulator/actions/workflows/integration.yml)
 [![Sponsor goccy](https://img.shields.io/badge/Sponsor%20goccy-%E2%9D%A4-db61a2)](https://github.com/sponsors/goccy)
 
-The only open-source emulator for Google BigQuery: a BigQuery-compatible server you run locally for testing and development, with no cloud project or credentials. Pure Go, no cgo, no C toolchain, no wasm runtime. The SQL engine is [googlesql-duckdb](https://github.com/esilver/googlesql-duckdb) - GoogleSQL on a pure-Go DuckDB backend, both transpiled from WebAssembly to Go ahead of time via [wasm2go](https://github.com/ncruces/wasm2go).
+An open-source emulator for Google BigQuery: a BigQuery-compatible server you run locally for testing and development, with no cloud project or credentials. Pure Go, no cgo, no C toolchain, no wasm runtime. The SQL engine is [googlesql-duckdb](https://github.com/esilver/googlesql-duckdb) - GoogleSQL on a pure-Go DuckDB backend, both transpiled from WebAssembly to Go ahead of time via [wasm2go](https://github.com/ncruces/wasm2go).
 
 # Quick start
 
@@ -329,7 +329,7 @@ BigQuery types like ARRAY and STRUCT do not map 1:1 to local SQL engines. google
 
 # Sponsorship
 
-`bigquery-emulator` was created and is maintained by [@goccy](https://github.com/goccy) (Masaaki Goshima), who built the only open-source BigQuery emulator to fill a long-standing gap (Google's [emulator request](https://issuetracker.google.com/issues/129248927) has sat open for years). This repository forks that work to swap the SQL backend to DuckDB and run pure-Go. All of the upstream emulator work it builds on is goccy's.
+`bigquery-emulator` was created and is maintained by [@goccy](https://github.com/goccy) (Masaaki Goshima), who built this open-source BigQuery emulator to fill a long-standing gap (Google's [emulator request](https://issuetracker.google.com/issues/129248927) has sat open for years). This repository forks that work to swap the SQL backend to DuckDB and run pure-Go. All of the upstream emulator work it builds on is goccy's.
 
 If this project saves you time, please sponsor the upstream author: <https://github.com/sponsors/goccy>.
 
