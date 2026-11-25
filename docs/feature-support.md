@@ -176,7 +176,7 @@ There is no `models.insert` in the BigQuery API — models are created with
 
 ## 6. Query language (GoogleSQL)
 
-Query execution is delegated to [`googlesqlite`](https://github.com/esilver/googlesqlite), which parses and analyzes [GoogleSQL](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/introduction) and runs it against the embedded backend. This table records what the **emulator** wires up. The authoritative per-function and per-type matrix lives in the [`googlesqlite` status](https://github.com/esilver/googlesqlite#status).
+Query execution is delegated to [`googlesql-duckdb`](https://github.com/esilver/googlesql-duckdb), which parses and analyzes [GoogleSQL](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/introduction) and runs it against the embedded backend. This table records what the **emulator** wires up. The authoritative per-function and per-type matrix lives in the [`googlesql-duckdb` status](https://github.com/esilver/googlesql-duckdb#status).
 
 | Feature | Status | Notes |
 | --- | --- | --- |
@@ -186,7 +186,7 @@ Query execution is delegated to [`googlesqlite`](https://github.com/esilver/goog
 | Scripting and multi-statement queries | ✅ | Subject to `googlesqlite` coverage. |
 | Stored procedures | ✅ | Created via `routines.insert` or DDL. |
 | Built-in functions | ✅ | Subject to the linked `googlesqlite` spec matrix. |
-| Data types (16 / 18) | ✅ | `NUMERIC` / `BIGNUMERIC` map to Arrow decimal types. See the [`googlesqlite` type matrix](https://github.com/esilver/googlesqlite#status) for the two not yet supported. |
+| Data types (16 / 18) | ✅ | `NUMERIC` / `BIGNUMERIC` map to Arrow decimal types. See the [`googlesql-duckdb` type matrix](https://github.com/esilver/googlesql-duckdb#status) for the two not yet supported. |
 | SQL UDFs | ✅ | |
 | JavaScript UDFs | ✅ | Inline `CREATE ... LANGUAGE js` functions; persisting a JS routine via `routines.insert` is not supported. |
 | Wildcard tables | ✅ | |

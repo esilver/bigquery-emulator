@@ -1,12 +1,12 @@
 # BigQuery Emulator
 
-> A fork of [goccy/bigquery-emulator](https://github.com/goccy/bigquery-emulator) with the SQL backend swapped to the DuckDB-backed [esilver/googlesqlite](https://github.com/esilver/googlesqlite) engine, running pure-Go (`CGO_ENABLED=0`).
+> A fork of [goccy/bigquery-emulator](https://github.com/goccy/bigquery-emulator) with the SQL backend swapped to the DuckDB-backed [esilver/googlesql-duckdb](https://github.com/esilver/googlesql-duckdb) engine, running pure-Go (`CGO_ENABLED=0`).
 
 [![build and test](https://github.com/esilver/bigquery-emulator/actions/workflows/test.yml/badge.svg)](https://github.com/esilver/bigquery-emulator/actions/workflows/test.yml)
 [![integration](https://github.com/esilver/bigquery-emulator/actions/workflows/integration.yml/badge.svg)](https://github.com/esilver/bigquery-emulator/actions/workflows/integration.yml)
 [![Sponsor goccy](https://img.shields.io/badge/Sponsor%20goccy-%E2%9D%A4-db61a2)](https://github.com/sponsors/goccy)
 
-The only open-source emulator for Google BigQuery: a BigQuery-compatible server you run locally for testing and development, with no cloud project or credentials. Pure Go, no cgo, no C toolchain, no wasm runtime. The SQL engine is [googlesqlite](https://github.com/esilver/googlesqlite) - GoogleSQL on a pure-Go DuckDB backend, both transpiled from WebAssembly to Go ahead of time via [wasm2go](https://github.com/ncruces/wasm2go).
+The only open-source emulator for Google BigQuery: a BigQuery-compatible server you run locally for testing and development, with no cloud project or credentials. Pure Go, no cgo, no C toolchain, no wasm runtime. The SQL engine is [googlesql-duckdb](https://github.com/esilver/googlesql-duckdb) - GoogleSQL on a pure-Go DuckDB backend, both transpiled from WebAssembly to Go ahead of time via [wasm2go](https://github.com/ncruces/wasm2go).
 
 # Quick start
 
@@ -35,11 +35,11 @@ See [Install](#install) for `go install`, prebuilt binaries, packages, and image
 **Is my workload covered?** Coverage is tracked feature by feature in a single matrix, so check two places:
 
 - **[BigQuery feature support matrix](./docs/feature-support.md)** for API-level features. Supported: dataset / table / job / tabledata management, GoogleSQL queries, load and extract jobs (including from Google Cloud Storage), streaming inserts, the gRPC Storage read/write APIs, external tables, and logical and materialized views. Not yet: IAM, row access policies, copy jobs, table snapshots, and BigQuery ML.
-- **[googlesqlite status](https://github.com/esilver/googlesqlite#status)** for per-function and per-type SQL coverage, which stays current as the engine evolves.
+- **[googlesql-duckdb status](https://github.com/esilver/googlesql-duckdb#status)** for per-function and per-type SQL coverage, which stays current as the engine evolves.
 
 ## GoogleSQL
 
-Query execution runs on [googlesqlite](https://github.com/esilver/googlesqlite). Beyond the per-function coverage in its [status matrix](https://github.com/esilver/googlesqlite#status), the emulator wires up wildcard tables, templated-argument functions, and JavaScript UDFs.
+Query execution runs on [googlesql-duckdb](https://github.com/esilver/googlesql-duckdb). Beyond the per-function coverage in its [status matrix](https://github.com/esilver/googlesql-duckdb#status), the emulator wires up wildcard tables, templated-argument functions, and JavaScript UDFs.
 
 ## Benchmarks
 
@@ -75,8 +75,8 @@ $ go install github.com/goccy/bigquery-emulator/cmd/bigquery-emulator@latest
 The DuckDB backend is wired through `replace` directives a module-path install cannot reach. To get it, either build from a checkout (`git clone https://github.com/esilver/bigquery-emulator && cd bigquery-emulator && go build ./cmd/...`), or, to import this fork from your own module, keep the `github.com/goccy/...` import paths and add the same two redirects this repo's `go.mod` uses:
 
 ```
-replace github.com/goccy/googlesqlite => github.com/esilver/googlesqlite v0.0.0-20260613063153-f7765896e410
-replace github.com/goccy/go-googlesql => github.com/esilver/go-googlesql v0.2.4-finalizer.1.0.20260611225755-3bdff21371a3
+replace github.com/goccy/googlesqlite => github.com/esilver/googlesql-duckdb v0.0.0-20261125172425-0a3b328bee58
+replace github.com/goccy/go-googlesql => github.com/esilver/go-googlesql v0.2.4-finalizer.1.0.20260611225755-12b653e5f488
 ```
 
 These pins advance over time, so match them to the `go.mod` in the checkout you build against.

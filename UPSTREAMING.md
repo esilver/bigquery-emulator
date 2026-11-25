@@ -1,13 +1,13 @@
 # Fork delta map
 
-A fork of [goccy/bigquery-emulator](https://github.com/goccy/bigquery-emulator) that swaps the SQL backend to the DuckDB-backed [esilver/googlesqlite](https://github.com/esilver/googlesqlite) engine, runs pure-Go (`CGO_ENABLED=0`), and publishes its own image and release artifacts under `esilver/`. The Go module path stays `github.com/goccy/bigquery-emulator`, so import paths are unchanged.
+A fork of [goccy/bigquery-emulator](https://github.com/goccy/bigquery-emulator) that swaps the SQL backend to the DuckDB-backed [esilver/googlesql-duckdb](https://github.com/esilver/googlesql-duckdb) engine, runs pure-Go (`CGO_ENABLED=0`), and publishes its own image and release artifacts under `esilver/`. The Go module path stays `github.com/goccy/bigquery-emulator`, so import paths are unchanged.
 
 Each section below names a file that diverges from upstream with a one-line why, to help a maintainer follow the divergence or rebase onto upstream.
 
 ## SQL backend swap
 
 - `go.mod` - two `replace` directives repoint the SQL engine to the fork's builds:
-  - `github.com/goccy/googlesqlite => github.com/esilver/googlesqlite` - the DuckDB-backed GoogleSQL engine, replacing upstream's SQLite-backed one.
+  - `github.com/goccy/googlesqlite => github.com/esilver/googlesql-duckdb` - the DuckDB-backed GoogleSQL engine, replacing upstream's SQLite-backed one.
   - `github.com/goccy/go-googlesql => github.com/esilver/go-googlesql` - the matching parser/runtime fork, pinned alongside it.
   - The DuckDB backend is reachable only through these directives, so a plain `go install` by module path still yields the upstream SQLite build (called out in the README Install note).
 
